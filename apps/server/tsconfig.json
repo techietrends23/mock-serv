@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "ignoreDeprecations": "6.0",
+    "rootDir": "../..",
+    "baseUrl": ".",
+    "paths": {
+      "@mock-serv/core": ["../../packages/core/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

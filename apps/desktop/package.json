@@ -1,0 +1,11 @@
+{
+  "name": "@mock-serv/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mock-serv/core": "file:../../packages/core",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  }
+}

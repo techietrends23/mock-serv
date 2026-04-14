@@ -1,0 +1,9 @@
+{
+  "name": "@mock-serv/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mock-serv/core": "file:../../packages/core"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "name": "mock-serv",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c magenta,cyan \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:web": "vite --config apps/desktop/vite.config.ts",
+    "dev:api": "tsx watch apps/server/src/index.ts",
+    "start": "npm run build && MOCK_SERV_UI_DIST=apps/desktop/dist tsx apps/server/src/index.ts",
+    "verify:petstore": "tsx ./scripts/verify-web-import.mts",
+    "build": "npm run check && npm run build:web",
+    "build:web": "vite build --config apps/desktop/vite.config.ts",
+    "build:renderer": "npm run build:web",
+    "check": "npm run check:core && npm run check:web && npm run check:server",
+    "check:core": "tsc -p packages/core/tsconfig.json",
+    "check:web": "tsc -p apps/desktop/tsconfig.json",
+    "check:desktop": "npm run check:web",
+    "check:server": "tsc -p apps/server/tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
+    "better-sqlite3": "^12.9.0",
+    "concurrently": "^9.2.1",
+    "fastify": "^5.8.4",
+    "graphql": "^16.13.2",
+    "graphql-yoga": "^5.21.0",
+    "nanoid": "^5.1.7",
+    "tsx": "^4.21.0",
+    "yaml": "^2.8.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4"
+  }
+}
