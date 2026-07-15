@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mock Serv — User Guide</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #1a1a2e;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #d87c3f;
+    --accent-light: #fdf2e9;
+    --code-bg: #f9fafb;
+    --card-bg: #f9fafb;
+    --success: #059669;
+    --warn: #d97706;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 0;
+  }
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+  header {
+    text-align: center;
+    padding: 48px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 40px;
+  }
+  header h1 {
+    font-size: 40px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+  header h1 span { color: var(--accent); }
+  header p {
+    color: var(--muted);
+    font-size: 18px;
+    margin-top: 8px;
+  }
+  h2 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 48px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--accent);
+    display: inline-block;
+  }
+  h3 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 32px 0 12px;
+    color: var(--accent);
+  }
+  h4 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 24px 0 8px;
+  }
+  p, li { color: var(--text); }
+  p { margin-bottom: 16px; }
+  ul, ol { margin: 8px 0 16px 24px; }
+  li { margin-bottom: 6px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 14px;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    margin: 12px 0 20px;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 16px 0 24px;
+  }
+  .card h4 { margin-top: 0; }
+  .step {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    align-items: flex-start;
+  }
+  .step-num {
+    background: var(--accent);
+    color: #fff;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .step-content { flex: 1; }
+  .step-content h4 { margin: 0 0 6px; }
+  .step-content p { margin: 0 0 4px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 20px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 14px;
+  }
+  th {
+    background: var(--code-bg);
+    font-weight: 600;
+  }
+  .badge {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.get { background: #d1fae5; color: #065f46; }
+  .badge.post { background: #fef3c7; color: #92400e; }
+  .badge.put { background: #dbeafe; color: #1e40af; }
+  .badge.patch { background: #fce7f3; color: #9d174d; }
+  .badge.delete { background: #fee2e2; color: #991b1b; }
+  .badge.running { background: #d1fae5; color: #065f46; }
+  .badge.stopped { background: #f3f4f6; color: #4b5563; }
+  .badge.warn { background: #fef3c7; color: #92400e; }
+  .toc {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 32px;
+  }
+  .toc h3 { margin: 0 0 12px; color: var(--text); }
+  .toc ol { margin: 0; }
+  .toc li { margin-bottom: 4px; }
+  .toc a { color: var(--text); }
+  .toc a:hover { color: var(--accent); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+  .tip {
+    background: var(--accent-light);
+    border: 1px solid #f5d7b5;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 16px 0;
+    font-size: 14px;
+  }
+  .tip strong { color: var(--accent); }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    padding: 40px 0 0;
+    border-top: 1px solid var(--border);
+    margin-top: 48px;
+  }
+  @media (max-width: 640px) {
+    .container { padding: 20px 16px 60px; }
+    header h1 { font-size: 28px; }
+    h2 { font-size: 22px; }
+    .step { flex-direction: column; }
+    .step-num { width: 28px; height: 28px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>Mock <span>Serv</span></h1>
+  <p>Local-first API mocking — import, capture, edit, and serve mock endpoints</p>
+</header>
+
+<div class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#setup">Setup &amp; Installation</a></li>
+    <li><a href="#run">Running the App</a></li>
+    <li><a href="#capture">Traffic Capture — Create Mocks from Live Traffic</a></li>
+    <li><a href="#import">Import API Definitions</a></li>
+    <li><a href="#manage">Managing Mocks</a></li>
+    <li><a href="#petstore">Petstore Example</a></li>
+    <li><a href="#mockdata">Mock Data &amp; CRUD Rows</a></li>
+    <li><a href="#tips">Tips &amp; Troubleshooting</a></li>
+  </ol>
+</div>
+
+<h2 id="setup">1. Setup &amp; Installation</h2>
+
+<h3>Prerequisites</h3>
+<ul>
+  <li><strong>Node.js</strong> 20+ and <strong>npm</strong> 10+</li>
+  <li>macOS, Windows, or Linux</li>
+</ul>
+
+<h3>Install</h3>
+<pre><code>git clone &lt;repo-url&gt; mock-serv
+cd mock-serv
+npm install
+npx playwright install chromium</code></pre>
+
+<div class="tip">
+  <strong>Note:</strong> Playwright is required for the <a href="#capture">Traffic Capture</a> feature. The app works without it for mock import/editing.
+</div>
+
+<h3>Verify</h3>
+<pre><code>npm run check
+npm test</code></pre>
+
+<hr>
+
+<h2 id="run">2. Running the App</h2>
+
+<h3>Development mode</h3>
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-content">
+    <h4>Start the app</h4>
+    <p>Run both the API server and web UI together:</p>
+    <pre><code>npm run dev</code></pre>
+  </div>
+</div>
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-content">
+    <h4>Open the UI</h4>
+    <p>Check the terminal output for the Vite URL (typically <code>http://127.0.0.1:5173</code> or the next available port).</p>
+  </div>
+</div>
+
+<h3>Production mode</h3>
+<pre><code>npm run build
+npm run start</code></pre>
+<p>This serves the built UI from <code>http://127.0.0.1:3001</code> — everything in one process.</p>
+
+<h3>What runs where</h3>
+<table>
+  <tr>
+    <th>Component</th>
+    <th>Port</th>
+    <th>Description</th>
+  </tr>
+  <tr><td>Web UI (Vite)</td><td>auto (first available)</td><td>React frontend with the mock editor</td></tr>
+  <tr><td>API Server (Fastify)</td><td>3001 (configurable via <code>MOCK_SERV_PORT</code>)</td><td>Local backend — persistence, mocks, capture</td></tr>
+  <tr><td>Mock Servers</td><td>dynamic</td><td>Each running mock gets its own port</td></tr>
+</table>
+
+<hr>
+
+<h2 id="capture">3. Traffic Capture — Create Mocks from Live Traffic</h2>
+
+<p>Mock Serv can open a browser, record every HTTP request it makes, and turn any individual request into a reusable mock — no OpenAPI specs or config files needed.</p>
+
+<h3>How it works</h3>
+<ol>
+  <li>A headed Chromium browser window opens on your machine</li>
+  <li>You navigate to the app or website you want to mock</li>
+  <li>Playwright captures every <code>request</code> and <code>response</code> pair</li>
+  <li>Captured calls are stored in SQLite and shown in the UI</li>
+  <li>Select any call and click <strong>Create Mock</strong> to instantly generate a mock</li>
+</ol>
+
+<h3>Step-by-step</h3>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-content">
+    <h4>Open Traffic Capture</h4>
+    <p>In the sidebar, click the <strong>Traffic Capture</strong> button to expand the capture panel.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-content">
+    <h4>Create a session</h4>
+    <p>Type a name (e.g. <code>my-app</code>) and click <strong>+ New Session</strong>.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-content">
+    <h4>Start capturing</h4>
+    <p>Click <strong>Start</strong> on the session. A Chromium browser window opens automatically.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">4</div>
+  <div class="step-content">
+    <h4>Navigate to your target</h4>
+    <p>In the browser that opened, type the URL of the app you want to mock and press Enter. Every network request the page makes is captured.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">5</div>
+  <div class="step-content">
+    <h4>Stop the session</h4>
+    <p>Return to Mock Serv and click <strong>Stop</strong>. The captured calls appear in a list.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">6</div>
+  <div class="step-content">
+    <h4>Select a call</h4>
+    <p>Click any call to inspect its full request and response:</p>
+    <ul>
+      <li>Request method, URL, and headers</li>
+      <li>Request body (JSON formatted)</li>
+      <li>Response status code and headers</li>
+      <li>Response body</li>
+    </ul>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">7</div>
+  <div class="step-content">
+    <h4>Create a mock</h4>
+    <p>Click <strong>Create Mock</strong>. In the dialog, optionally name the mock and confirm. Mock Serv automatically:</p>
+    <ul>
+      <li>Extracts the HTTP method and path</li>
+      <li>Infers query parameters from the URL</li>
+      <li>Infers request &amp; response JSON schemas from bodies</li>
+      <li>Sets the response status code and example body</li>
+      <li>Creates a full <code>MockDefinition</code> with one endpoint</li>
+    </ul>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">8</div>
+  <div class="step-content">
+    <h4>Use the mock</h4>
+    <p>The new mock appears in <strong>Available Mocks</strong>. Click <strong>Start</strong> to boot it, then call it:</p>
+    <pre><code>curl http://127.0.0.1:&lt;port&gt;/your/path</code></pre>
+  </div>
+</div>
+
+<div class="tip">
+  <strong>Tip:</strong> You can create mocks from multiple calls in the same session. Each mock gets its own port and can be edited independently.
+</div>
+
+<hr>
+
+<h2 id="import">4. Import API Definitions</h2>
+
+<p>Mock Serv can parse existing API definitions and convert them into editable mocks. Supported formats:</p>
+
+<table>
+  <tr>
+    <th>Format</th>
+    <th>Source type</th>
+    <th>Example</th>
+  </tr>
+  <tr>
+    <td>OpenAPI / Swagger</td>
+    <td><code>openapi</code></td>
+    <td>YAML or JSON spec files</td>
+  </tr>
+  <tr>
+    <td>cURL</td>
+    <td><code>curl</code></td>
+    <td><code>curl -X POST https://api.example.com/users -H ...</code></td>
+  </tr>
+  <tr>
+    <td>Postman Collection</td>
+    <td><code>postman</code></td>
+    <td>Exported Collection v2.1 JSON</td>
+  </tr>
+  <tr>
+    <td>HAR</td>
+    <td><code>har</code></td>
+    <td>Browser-exported HTTP Archive</td>
+  </tr>
+</table>
+
+<h3>Steps</h3>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-content">
+    <h4>Select source type</h4>
+    <p>Choose from OpenAPI, cURL, Postman, or HAR in the Import panel.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-content">
+    <h4>Choose protocol</h4>
+    <p>Select <strong>REST</strong> or <strong>GraphQL</strong> depending on your API.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-content">
+    <h4>Provide the definition</h4>
+    <p>Either paste the content directly into the textarea, or click <strong>Choose local file</strong> to upload.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">4</div>
+  <div class="step-content">
+    <h4>Name and import</h4>
+    <p>Enter a mock name (it must be unique) and click <strong>Analyze and Import</strong>.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">5</div>
+  <div class="step-content">
+    <h4>Edit and start</h4>
+    <p>The mock appears in Available Mocks. Select it to edit endpoints, then click <strong>Start</strong> to serve it.</p>
+  </div>
+</div>
+
+<hr>
+
+<h2 id="manage">5. Managing Mocks</h2>
+
+<h3>Mock Editor</h3>
+<p>When you select a mock from the list, the main panel splits into two columns:</p>
+
+<table>
+  <tr>
+    <th>Editor (left)</th>
+    <th>Inspector (right)</th>
+  </tr>
+  <tr>
+    <td>Mock name, protocol, port</td>
+    <td>Runtime status and port</td>
+  </tr>
+  <tr>
+    <td>Global latency &amp; error rate</td>
+    <td>Endpoint count</td>
+  </tr>
+  <tr>
+    <td>Endpoint list (expand/collapse)</td>
+    <td>Selected endpoint detail</td>
+  </tr>
+  <tr>
+    <td>Per-endpoint: method, path, status, schemas, headers</td>
+    <td>Recent logs</td>
+  </tr>
+  <tr>
+    <td>Add / remove endpoints</td>
+    <td></td>
+  </tr>
+</table>
+
+<h3>Actions</h3>
+<ul>
+  <li><strong>Start</strong> — boots a local HTTP server on a random (or specified) port</li>
+  <li><strong>Stop</strong> — gracefully shuts down the mock server</li>
+  <li><strong>Hot Reload</strong> — restarts a running mock after edits</li>
+  <li><strong>Delete</strong> — removes the mock and all its data from SQLite</li>
+  <li><strong>Save</strong> — persists all editor changes</li>
+  <li><strong>Seed Data</strong> — inserts sample rows into the mock's CRUD table for an endpoint</li>
+</ul>
+
+<h3>Endpoint editing</h3>
+<p>Each endpoint can be configured individually:</p>
+<ul>
+  <li><strong>Method</strong> — GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD</li>
+  <li><strong>Path</strong> — supports path parameters with <code>:param</code> or <code>{param}</code> syntax</li>
+  <li><strong>Status code</strong> — the HTTP status to return</li>
+  <li><strong>Latency</strong> — artificial delay in milliseconds</li>
+  <li><strong>Error rate</strong> — probability (0–1) of returning an error instead of the normal response</li>
+  <li><strong>Request headers</strong> — JSON object of header key/value pairs</li>
+  <li><strong>Request schema</strong> — JSON Schema for validating incoming request bodies</li>
+  <li><strong>Response schema</strong> — JSON Schema that defines the shape of generated responses</li>
+  <li><strong>Response example</strong> — a concrete response body (used as-is when no schema is provided)</li>
+</ul>
+
+<hr>
+
+<h2 id="petstore">6. Petstore Example</h2>
+
+<p>The repo includes <code>petstore.yaml</code> — a full OpenAPI 3 Petstore specification. Use it to verify the end-to-end workflow:</p>
+
+<h3>Manual walkthrough</h3>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-content">
+    <h4>Start the app</h4>
+    <pre><code>npm run dev</code></pre>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-content">
+    <h4>Import petstore.yaml</h4>
+    <p>In the Import panel: set Source <code>OpenAPI / Swagger</code>, Protocol <code>REST</code>, upload <code>petstore.yaml</code>, enter name <code>petstore-local</code>, click <strong>Analyze and Import</strong>.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-content">
+    <h4>Start the mock</h4>
+    <p>Click <strong>Start</strong> on the <code>petstore-local</code> card. Note the assigned port (e.g. 54321).</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">4</div>
+  <div class="step-content">
+    <h4>Call the mock</h4>
+    <pre><code># List pets by status
+curl http://127.0.0.1:54321/pet/findByStatus?status=available
+
+# Get a pet by ID
+curl http://127.0.0.1:54321/pet/1
+
+# Create a pet
+curl -X POST http://127.0.0.1:54321/pet \
+  -H 'content-type: application/json' \
+  -d '{"id":1,"name":"Fluffy","status":"available"}'
+
+# Update a pet
+curl -X PUT http://127.0.0.1:54321/pet \
+  -H 'content-type: application/json' \
+  -d '{"id":1,"name":"Fluffy","status":"sold"}'
+
+# Store inventory
+curl http://127.0.0.1:54321/store/inventory</code></pre>
+  </div>
+</div>
+
+<h3>Automated verification</h3>
+<pre><code>npm run verify:petstore</code></pre>
+<p>This script starts the API, imports <code>petstore.yaml</code>, boots the mock, hits <code>GET /pet/findByStatus</code>, and asserts a <code>200</code> response with an array body.</p>
+
+<hr>
+
+<h2 id="mockdata">7. Mock Data &amp; CRUD Rows</h2>
+
+<h3>How mock responses work</h3>
+<p>When a mock endpoint receives a request, it generates a response using this priority:</p>
+<ol>
+  <li><strong>Response example</strong> — if set, returned as-is for every request</li>
+  <li><strong>Response schema</strong> — generates sample data matching the schema</li>
+  <li><strong>CRUD rows</strong> — for seeded endpoints, reads from the row table</li>
+  <li><strong>Fallback</strong> — returns <code>{}</code> or a basic placeholder</li>
+</ol>
+
+<h3>Seeding data</h3>
+<p>Seeded data gives you predictable responses for CRUD-style endpoints. To seed data:</p>
+
+<div class="step">
+  <div class="step-num">1</div>
+  <div class="step-content">
+    <p>Select a mock and expand an endpoint in the editor.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">2</div>
+  <div class="step-content">
+    <p>Click <strong>Seed Data</strong> — it inserts a sample row into the endpoint's CRUD table.</p>
+  </div>
+</div>
+
+<div class="step">
+  <div class="step-num">3</div>
+  <div class="step-content">
+    <p>The next <strong>GET</strong> request returns the seeded rows. <strong>POST</strong> creates new rows, <strong>PUT/PATCH</strong> update them, <strong>DELETE</strong> removes them.</p>
+  </div>
+</div>
+
+<h3>Example: CRUD workflow</h3>
+<p>After seeding a row for a <code>GET /users</code> endpoint:</p>
+
+<table>
+  <tr>
+    <th>Request</th>
+    <th>Response</th>
+  </tr>
+  <tr>
+    <td><code>GET /users</code></td>
+    <td><code>[{"id":"sample","name":"Seed Row","active":true}]</code></td>
+  </tr>
+  <tr>
+    <td><code>GET /users/sample</code></td>
+    <td><code>{"id":"sample","name":"Seed Row","active":true}</code></td>
+  </tr>
+  <tr>
+    <td><code>POST /users</code> with <code>{"name":"New"}</code></td>
+    <td><code>{"id":"row_abc123","name":"New"}</code></td>
+  </tr>
+  <tr>
+    <td><code>PUT /users/sample</code> with <code>{"name":"Updated"}</code></td>
+    <td><code>{"id":"sample","name":"Updated","active":true}</code></td>
+  </tr>
+  <tr>
+    <td><code>DELETE /users/sample</code></td>
+    <td><code>204 No Content</code></td>
+  </tr>
+</table>
+
+<h3>Schema-driven responses</h3>
+<p>If you set a response schema instead of (or in addition to) an example, Mock Serv generates realistic data:</p>
+
+<div class="card">
+  <h4>Example response schema</h4>
+  <pre><code>{
+  "type": "object",
+  "properties": {
+    "id": { "type": "integer", "example": 42 },
+    "email": { "type": "string", "format": "email", "example": "user@example.com" },
+    "profile": {
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "avatar": { "type": "string", "format": "uri" }
+      }
+    }
+  }
+}</code></pre>
+</div>
+
+<p>With this schema, <code>GET /users/42</code> returns:</p>
+<pre><code>{
+  "id": 42,
+  "email": "user@example.com",
+  "profile": {
+    "displayName": "string",
+    "avatar": "string"
+  }
+}</code></pre>
+
+<div class="tip">
+  <strong>Tip:</strong> Use the <strong>Traffic Capture</strong> feature first to see real response bodies, then <strong>Create Mock</strong> to automatically generate the schema from those real responses.
+</div>
+
+<hr>
+
+<h2 id="tips">8. Tips &amp; Troubleshooting</h2>
+
+<h3>Best practices</h3>
+<ul>
+  <li><strong>Use Traffic Capture for new APIs</strong> — the quickest way to create mocks is to record a real session</li>
+  <li><strong>Name mocks consistently</strong> — names become part of SQLite table names, so keep them identifier-safe</li>
+  <li><strong>Set latency for realistic behavior</strong> — add 50–200ms latency to simulate network conditions</li>
+  <li><strong>Use error rates for testing</strong> — set <code>errorRate: 0.1</code> to make 10% of responses fail</li>
+  <li><strong>Hot reload after edits</strong> — click Hot Reload to apply endpoint changes to a running mock</li>
+</ul>
+
+<h3>Common issues</h3>
+
+<table>
+  <tr>
+    <th>Issue</th>
+    <th>Solution</th>
+  </tr>
+  <tr>
+    <td>UI loads but actions fail</td>
+    <td>Ensure both frontend and backend are running: <code>npm run dev</code>. Check <code>http://127.0.0.1:3001/api/health</code>.</td>
+  </tr>
+  <tr>
+    <td>Traffic Capture browser doesn't open</td>
+    <td>Run <code>npx playwright install chromium</code> to install the browser binary.</td>
+  </tr>
+  <tr>
+    <td>Capture shows no calls</td>
+    <td>Make sure you navigated to a URL in the browser window that opened, and that the target sends HTTP requests.</td>
+  </tr>
+  <tr>
+    <td>Port conflict</td>
+    <td>Change ports with <code>MOCK_SERV_PORT=3002</code> or <code>MOCK_SERV_HOST=0.0.0.0</code>.</td>
+  </tr>
+  <tr>
+    <td>OpenAPI import fails</td>
+    <td>The spec must be valid. External <code>$ref</code> targets must be resolvable over the network.</td>
+  </tr>
+  <tr>
+    <td>Mock starts but returns errors</td>
+    <td>Check the Logs panel in the inspector for runtime error messages.</td>
+  </tr>
+</table>
+
+<h3>Environment variables</h3>
+<table>
+  <tr>
+    <th>Variable</th>
+    <th>Default</th>
+    <th>Description</th>
+  </tr>
+  <tr><td><code>MOCK_SERV_HOST</code></td><td><code>127.0.0.1</code></td><td>API server listen host</td></tr>
+  <tr><td><code>MOCK_SERV_PORT</code></td><td><code>3001</code></td><td>API server listen port</td></tr>
+  <tr><td><code>MOCK_SERV_DATA_DIR</code></td><td><code>.mock-serv-data</code></td><td>SQLite storage directory</td></tr>
+  <tr><td><code>MOCK_SERV_UI_DIST</code></td><td><em>none</em></td><td>Path to built UI files (production)</td></tr>
+</table>
+
+<footer>
+  Mock Serv &mdash; Built with React, Fastify, Playwright &amp; SQLite
+</footer>
+
+</div>
+</body>
+</html>

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import type { LogEntry, MockDefinition, MockEndpoint, MockRow } from '../types.ts';
+import type { CapturedCall, CaptureSession, LogEntry, MockDefinition, MockEndpoint, MockRow } from '../types.ts';
 import { nowIso, sanitizeIdentifier, safeJsonParse, stableId, toTableName } from '../utils.ts';
 
 const require = createRequire(import.meta.url);
@@ -137,6 +137,32 @@ export class WorkspaceRepository {
         message TEXT NOT NULL,
         payload TEXT,
         createdAt TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS capture_sessions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        proxyPort INTEGER,
+        status TEXT NOT NULL DEFAULT 'idle',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS captured_calls (
+        id TEXT PRIMARY KEY,
+        sessionId TEXT NOT NULL,
+        method TEXT NOT NULL,
+        url TEXT NOT NULL,
+        host TEXT,
+        path TEXT,
+        queryString TEXT,
+        requestHeaders TEXT,
+        requestBody TEXT,
+        responseStatus INTEGER,
+        responseHeaders TEXT,
+        responseBody TEXT,
+        contentType TEXT,
+        durationMs REAL,
+        timestamp TEXT,
+        FOREIGN KEY (sessionId) REFERENCES capture_sessions(id) ON DELETE CASCADE
       );
     `);
   }
@@ -467,6 +493,136 @@ export class WorkspaceRepository {
       payload: safeJsonParse(row.payload ?? undefined, undefined),
       createdAt: row.createdAt
     }));
+  }
+
+  listCaptureSessions(): CaptureSession[] {
+    const rows = this.db.prepare('SELECT * FROM capture_sessions ORDER BY createdAt DESC').all() as Array<{
+      id: string;
+      name: string;
+      proxyPort: number | null;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+    return rows.map((row) => ({
+      ...row,
+      proxyPort: row.proxyPort ?? undefined,
+      status: row.status as CaptureSession['status'],
+      callCount: this.db.prepare('SELECT COUNT(*) as count FROM captured_calls WHERE sessionId = ?').get(row.id).count
+    }));
+  }
+
+  getCaptureSession(id: string): CaptureSession | undefined {
+    const row = this.db.prepare('SELECT * FROM capture_sessions WHERE id = ?').get(id) as {
+      id: string;
+      name: string;
+      proxyPort: number | null;
+      status: string;
+      createdAt: string;
+      updatedAt: string;
+    } | undefined;
+    if (!row) return undefined;
+    return {
+      ...row,
+      proxyPort: row.proxyPort ?? undefined,
+      status: row.status as CaptureSession['status'],
+      callCount: this.db.prepare('SELECT COUNT(*) as count FROM captured_calls WHERE sessionId = ?').get(row.id).count
+    };
+  }
+
+  saveCaptureSession(session: Omit<CaptureSession, 'callCount'>): CaptureSession {
+    this.db.prepare(`
+      INSERT INTO capture_sessions (id, name, proxyPort, status, createdAt, updatedAt)
+      VALUES (@id, @name, @proxyPort, @status, @createdAt, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        proxyPort = excluded.proxyPort,
+        status = excluded.status,
+        updatedAt = excluded.updatedAt
+    `).run({
+      ...session,
+      proxyPort: session.proxyPort ?? null
+    });
+    return this.getCaptureSession(session.id)!;
+  }
+
+  deleteCaptureSession(id: string): void {
+    this.db.prepare('DELETE FROM captured_calls WHERE sessionId = ?').run(id);
+    this.db.prepare('DELETE FROM capture_sessions WHERE id = ?').run(id);
+  }
+
+  listCapturedCalls(sessionId: string): CapturedCall[] {
+    const rows = this.db.prepare('SELECT * FROM captured_calls WHERE sessionId = ? ORDER BY timestamp DESC').all(sessionId) as Array<{
+      id: string;
+      sessionId: string;
+      method: string;
+      url: string;
+      host: string | null;
+      path: string | null;
+      queryString: string | null;
+      requestHeaders: string | null;
+      requestBody: string | null;
+      responseStatus: number | null;
+      responseHeaders: string | null;
+      responseBody: string | null;
+      contentType: string | null;
+      durationMs: number | null;
+      timestamp: string | null;
+    }>;
+    return rows.map(this.rowToCapturedCall);
+  }
+
+  getCapturedCall(id: string): CapturedCall | undefined {
+    const row = this.db.prepare('SELECT * FROM captured_calls WHERE id = ?').get(id) as any;
+    return row ? this.rowToCapturedCall(row) : undefined;
+  }
+
+  deleteCapturedCall(id: string): void {
+    this.db.prepare('DELETE FROM captured_calls WHERE id = ?').run(id);
+  }
+
+  private rowToCapturedCall(row: any): CapturedCall {
+    return {
+      id: row.id,
+      sessionId: row.sessionId,
+      method: row.method,
+      url: row.url,
+      host: row.host ?? '',
+      path: row.path ?? '',
+      queryString: row.queryString ?? '',
+      requestHeaders: safeJsonParse(row.requestHeaders ?? undefined, {}),
+      requestBody: safeJsonParse(row.requestBody ?? undefined, undefined),
+      responseStatus: row.responseStatus ?? 0,
+      responseHeaders: safeJsonParse(row.responseHeaders ?? undefined, {}),
+      responseBody: safeJsonParse(row.responseBody ?? undefined, undefined),
+      contentType: row.contentType ?? '',
+      durationMs: row.durationMs ?? 0,
+      timestamp: row.timestamp ?? ''
+    };
+  }
+
+  insertCapturedCall(call: Omit<CapturedCall, 'id'> & { id: string }): CapturedCall {
+    this.db.prepare(`
+      INSERT INTO captured_calls (id, sessionId, method, url, host, path, queryString, requestHeaders, requestBody, responseStatus, responseHeaders, responseBody, contentType, durationMs, timestamp)
+      VALUES (@id, @sessionId, @method, @url, @host, @path, @queryString, @requestHeaders, @requestBody, @responseStatus, @responseHeaders, @responseBody, @contentType, @durationMs, @timestamp)
+    `).run({
+      id: call.id,
+      sessionId: call.sessionId,
+      method: call.method,
+      url: call.url,
+      host: call.host,
+      path: call.path,
+      queryString: call.queryString,
+      requestHeaders: JSON.stringify(call.requestHeaders),
+      requestBody: call.requestBody !== undefined ? JSON.stringify(call.requestBody) : null,
+      responseStatus: call.responseStatus,
+      responseHeaders: JSON.stringify(call.responseHeaders),
+      responseBody: call.responseBody !== undefined ? JSON.stringify(call.responseBody) : null,
+      contentType: call.contentType,
+      durationMs: call.durationMs,
+      timestamp: call.timestamp
+    });
+    return this.getCapturedCall(call.id)!;
   }
 
   ensureCrudTable(tableName: string): void {

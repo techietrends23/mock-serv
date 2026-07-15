@@ -3,6 +3,7 @@ import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { MockDefinition, MockEndpoint } from '@mock-serv/core';
 import { MockService } from '@mock-serv/core';
+import { registerCaptureRoutes } from './capture-routes.ts';
 
 export interface BuildServerOptions {
   dataDir?: string;
@@ -120,6 +121,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
     '/api/mocks/:mockId/endpoints/:endpointId/rows',
     async (request) => service.seedRows(request.params.mockId, request.params.endpointId, request.body.rows)
   );
+
+  registerCaptureRoutes(server, service);
 
   if (uiDistDir && fs.existsSync(uiDistDir)) {
     server.get('/', async (_request, reply) => {

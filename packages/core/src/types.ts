@@ -88,3 +88,33 @@ export interface MockSnapshot {
   mock: MockDefinition;
   rowsByEndpoint: Record<string, MockRow[]>;
 }
+
+export type CaptureStatus = 'idle' | 'starting' | 'running' | 'stopped';
+
+export interface CaptureSession {
+  id: string;
+  name: string;
+  proxyPort?: number;
+  status: CaptureStatus;
+  createdAt: string;
+  updatedAt: string;
+  callCount: number;
+}
+
+export interface CapturedCall {
+  id: string;
+  sessionId: string;
+  method: string;
+  url: string;
+  host: string;
+  path: string;
+  queryString: string;
+  requestHeaders: Record<string, string>;
+  requestBody: unknown;
+  responseStatus: number;
+  responseHeaders: Record<string, string>;
+  responseBody: unknown;
+  contentType: string;
+  durationMs: number;
+  timestamp: string;
+}

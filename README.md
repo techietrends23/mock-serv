@@ -1,11 +1,13 @@
 # Mock Serv
 
-Mock Serv is a local-first web app for importing API definitions and generating configurable mock servers.
+Mock Serv is a local-first web app for importing API definitions, capturing live HTTP traffic, and generating configurable mock servers.
 
 The browser UI runs in Vite. A local Node API runs beside it and is responsible for:
 
 - importing OpenAPI, cURL, Postman, and HAR definitions
 - persisting mocks and rows in SQLite
+- capturing live HTTP traffic via a Playwright browser session
+- creating mocks from captured requests
 - starting and stopping local REST or GraphQL mock servers
 - exposing logs and seeded data back to the UI
 
@@ -13,7 +15,7 @@ The browser UI runs in Vite. A local Node API runs beside it and is responsible 
 
 - `apps/desktop` - browser UI built with React and Vite
 - `apps/server` - local Node API that wraps `MockService`
-- `packages/core` - shared importers, SQLite repository, runtime manager, and schema helpers
+- `packages/core` - shared importers, SQLite repository, runtime manager, capture modules, and schema helpers
 - `petstore.yaml` - OpenAPI sample used for verification
 
 ## Tech Stack
@@ -22,6 +24,7 @@ The browser UI runs in Vite. A local Node API runs beside it and is responsible 
 - Vite for the frontend dev server and build
 - Fastify for the local API server and REST mocks
 - GraphQL Yoga for GraphQL mocks
+- Playwright for browser automation and traffic capture
 - `better-sqlite3` for local SQLite persistence
 - `@apidevtools/swagger-parser` and `yaml` for OpenAPI parsing
 
@@ -39,13 +42,19 @@ The browser UI runs in Vite. A local Node API runs beside it and is responsible 
 npm install
 ```
 
-2. Verify the workspace:
+2. Install Playwright browser (required for traffic capture):
+
+```bash
+npx playwright install chromium
+```
+
+3. Verify the workspace:
 
 ```bash
 npm run check
 ```
 
-3. Run the test suite:
+4. Run the test suite:
 
 ```bash
 npm test
@@ -59,14 +68,17 @@ Start the local API and browser UI together:
 npm run dev
 ```
 
-This starts:
-
-- the local API on `http://127.0.0.1:3001`
-- the Vite web UI on `http://127.0.0.1:5173`
-
-Open `http://127.0.0.1:5173` in your browser.
-
 The Vite dev server proxies `/api/*` requests to the local backend, so the UI and backend behave like one app during development.
+
+### Custom ports
+
+If the default ports are in use, set them with environment variables:
+
+```bash
+MOCK_SERV_PORT=3002 npm run dev
+```
+
+The API server respects `MOCK_SERV_PORT` (default 3001). Vite auto-selects an available port for the web UI — check the terminal output for the URL.
 
 ## Run As A Built Web App
 
@@ -116,7 +128,19 @@ Then open:
 http://127.0.0.1:5173
 ```
 
-### 2. Import an API definition
+### 2. Capture live traffic (optional)
+
+Click **Traffic Capture** in the sidebar.
+
+1. Enter a session name and click **+ New Session**
+2. Click **Start** - a Playwright browser window opens
+3. Navigate to any website or app in that browser
+4. All HTTP/HTTPS traffic is captured automatically
+5. Click **Stop** when done
+6. Select any captured call to inspect request/response details
+7. Click **Create Mock** to instantly create a mock from that call
+
+### 3. Import an API definition
 
 Use the Import panel to either:
 
@@ -130,7 +154,7 @@ Supported sources:
 - Postman Collection JSON
 - HAR JSON
 
-### 3. Enter a mock name
+### 4. Enter a mock name
 
 The mock name is required before the imported definition is persisted.
 
@@ -140,7 +164,7 @@ It is used to:
 - generate SQLite table names for endpoint data
 - keep multiple imported mocks separated
 
-### 4. Analyze and import
+### 5. Analyze and import
 
 Click `Analyze and Import`.
 
@@ -151,7 +175,7 @@ The local API will:
 - persist the mock in SQLite
 - generate endpoint metadata for editing and runtime use
 
-### 5. Start the mock
+### 6. Start the mock
 
 Click `Start` from the Available Mocks panel.
 
@@ -162,7 +186,7 @@ The backend will:
 - register all imported routes
 - begin serving schema-generated or seeded responses
 
-### 6. Edit and save
+### 7. Edit and save
 
 Use the editor to:
 
@@ -175,7 +199,7 @@ Use the editor to:
 
 When you save a mock, the backend persists the changes and hot-reloads the runtime if that mock is running.
 
-### 7. Inspect logs and runtime state
+### 8. Inspect logs and runtime state
 
 The inspector shows:
 
@@ -199,12 +223,33 @@ That database includes:
 - endpoint definitions
 - CRUD-backed rows
 - request and runtime logs
+- capture sessions and captured calls
 
 You can override the storage location with:
 
 ```bash
 MOCK_SERV_DATA_DIR=/absolute/or/relative/path
 ```
+
+## Traffic Capture Walkthrough
+
+Capture live HTTP traffic from any website and turn individual requests into mocks:
+
+1. Start the app: `npm run dev`
+2. Click **Traffic Capture** in the sidebar
+3. Create a session named e.g. `my-app`
+4. Click **Start** - a headed Chromium browser opens automatically
+5. In that browser, navigate to the app you want to mock:
+   ```
+   http://localhost:4000
+   ```
+6. Interact with the app normally - every network request is recorded
+7. Return to Mock Serv and click **Stop**
+8. The captured calls appear in a list with method, status code, and path
+9. Click any call to inspect its request headers, request body, response headers, and response body
+10. Click **Create Mock** to generate a mock definition from that call
+11. Name the mock and confirm - it appears in Available Mocks
+12. Start the mock and call it with `curl` or your browser
 
 ## Petstore Walkthrough
 
@@ -294,6 +339,18 @@ npm run dev:api
 - The importer expects a valid OpenAPI or Swagger document
 - YAML files are supported directly
 - If a `$ref` points to external content, that target must be resolvable locally or over the network
+
+### Traffic Capture fails to start
+
+- Ensure Playwright browsers are installed: `npx playwright install chromium`
+- The browser must be able to open a headed window (requires a display on Linux)
+- If a browser window doesn't appear, check that no headless mode override is in effect
+
+### Captured calls show no response body
+
+- Some responses (e.g., binary, streaming) may not be captured
+- CORS preflight `OPTIONS` requests are typically captured as well
+- Only HTTP/HTTPS URLs are captured; `ws://` or `wss://` WebSocket traffic is not
 
 ## Verification Status
 

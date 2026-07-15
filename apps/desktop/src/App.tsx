@@ -14,6 +14,7 @@ import {
   syncMock
 } from './api';
 import type { LogEntry, MockDefinition, MockEndpoint, MockProtocol, MockSourceType } from '@mock-serv/core';
+import CapturePanel from './capture/CapturePanel';
 
 type ImportFormState = {
   sourceType: MockSourceType;
@@ -53,6 +54,7 @@ export default function App(): React.ReactElement {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [message, setMessage] = useState<string>('');
   const [busy, setBusy] = useState(false);
+  const [showCapture, setShowCapture] = useState(true);
 
   async function handleFileSelected(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
     const file = event.target.files?.[0];
@@ -241,6 +243,12 @@ export default function App(): React.ReactElement {
           </div>
         </div>
 
+        <button className="secondary capture-toggle" onClick={() => {
+          setShowCapture(!showCapture);
+        }}>
+          {showCapture ? 'Hide Traffic Capture' : 'Traffic Capture'}
+        </button>
+
         <section className="panel">
           <h2>Import</h2>
           <label>
@@ -380,6 +388,16 @@ export default function App(): React.ReactElement {
             <div className="mock-empty">No mocks yet. Import a definition to create the first one.</div>
           )}
         </section>
+
+        {showCapture ? (
+          <CapturePanel
+            onMockCreated={async (mock) => {
+              setSelectedMockId(mock.id);
+              setSelectedMock(mock);
+              await refreshAll(mock.id);
+            }}
+          />
+        ) : null}
 
         {selectedMock ? (
           <section className="grid">
@@ -624,7 +642,7 @@ export default function App(): React.ReactElement {
         ) : (
           <section className="panel empty-state">
             <h2>No mock selected</h2>
-            <p>Import a definition to create a new local mock, or pick one from the list.</p>
+            <p>Import a definition, capture traffic, or pick a mock from the list.</p>
           </section>
         )}
 

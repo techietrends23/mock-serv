@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -k -n api,web -c magenta,cyan \"npm run dev:api\" \"npm run dev:web\"",
+    "dev": "node scripts/dev.mjs",
     "dev:web": "vite --config apps/desktop/vite.config.ts",
     "dev:api": "tsx watch apps/server/src/index.ts",
     "start": "npm run build && MOCK_SERV_UI_DIST=apps/desktop/dist tsx apps/server/src/index.ts",
@@ -30,6 +30,7 @@
     "graphql": "^16.13.2",
     "graphql-yoga": "^5.21.0",
     "nanoid": "^5.1.7",
+    "playwright": "^1.52.0",
     "tsx": "^4.21.0",
     "yaml": "^2.8.3"
   },
@@ -42,5 +43,10 @@
     "typescript": "^6.0.2",
     "vite": "^8.0.8",
     "vitest": "^4.1.4"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.9.0": true,
+    "esbuild@0.27.7": true,
+    "fsevents@2.3.3": true
   }
 }

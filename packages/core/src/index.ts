@@ -10,3 +10,7 @@ export * from './runtime/rest.ts';
 export * from './runtime/graphql.ts';
 export * from './runtime/mock-runtime.ts';
 export * from './service/mock-service.ts';
+export * from './capture/proxy.ts';
+export * from './capture/flow-parser.ts';
+export * from './capture/browser.ts';
+export * from './capture/session.ts';
