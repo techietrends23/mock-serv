@@ -10,11 +10,22 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@mock-serv/core': path.resolve(rootDir, '../../packages/core/src/index.ts')
+      // Use browser-safe entry so Vite does not pull Fastify/Playwright/SQLite into the client.
+      '@mock-serv/core': path.resolve(rootDir, '../../packages/core/src/browser.ts'),
+      fsevents: path.resolve(rootDir, 'fsevents-stub.js')
     }
+  },
+  optimizeDeps: {
+    exclude: ['fsevents'],
+    include: ['react', 'react-dom', 'react-dom/client'],
+    holdUntilCrawlEnd: false
   },
   server: {
     host: '127.0.0.1',
+    watch: {
+      usePolling: true,
+      interval: 300
+    },
     proxy: {
       '/api': {
         target: `http://127.0.0.1:${process.env.MOCK_SERV_PORT || 3001}`,
