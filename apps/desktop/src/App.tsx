@@ -1,19 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  deleteEndpoint,
   deleteMock,
+  getMockSessionStatus,
   importMock,
-  listLogs,
   listMocks,
   listRows,
   parseImport,
   saveMock,
   seedRows,
+  setMockSessionEnabled,
   startMock,
+  startMockSession,
   stopMock,
+  stopMockSession,
   syncMock
 } from './api';
-import type { LogEntry, MockDefinition, MockEndpoint, MockProtocol, MockSourceType } from '@mock-serv/core';
+import type { MockDefinition, MockEndpoint, MockProtocol, MockSourceType } from '@mock-serv/core';
 import CapturePanel from './capture/CapturePanel';
 
 type ImportFormState = {
@@ -26,6 +28,8 @@ type ImportFormState = {
 };
 
 type EditorState = MockDefinition | null;
+type ResponseViewMode = 'json' | 'raw';
+type JsonDrafts = Record<string, string>;
 
 const emptyImport: ImportFormState = {
   sourceType: 'openapi',
@@ -45,16 +49,172 @@ function parseJsonInput(value: string): unknown {
   return JSON.parse(value);
 }
 
+function jsonDraftKey(endpointId: string, field: string): string {
+  return `${endpointId}:${field}`;
+}
+
+function parseDraftKey(key: string): { endpointId: string; field: string } | null {
+  const index = key.indexOf(':');
+  if (index === -1) return null;
+  return { endpointId: key.slice(0, index), field: key.slice(index + 1) };
+}
+
+function rawResponse(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function responseDisplay(value: unknown, mode: ResponseViewMode): string {
+  if (mode === 'raw') return rawResponse(value);
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
+function ResponseViewer({
+  value,
+  draft,
+  mode,
+  wrap,
+  onModeChange,
+  onWrapChange,
+  onDraftChange,
+  onChange,
+  onError
+}: {
+  value: unknown;
+  draft?: string;
+  mode: ResponseViewMode;
+  wrap: boolean;
+  onModeChange: (mode: ResponseViewMode) => void;
+  onWrapChange: (wrap: boolean) => void;
+  onDraftChange: (value: string | undefined) => void;
+  onChange: (value: unknown) => void;
+  onError: (message: string) => void;
+}): React.ReactElement {
+  const display = draft ?? responseDisplay(value, mode);
+  function commit(nextText: string): void {
+    try {
+      onChange(mode === 'json' ? parseJsonInput(nextText) : nextText);
+      onDraftChange(undefined);
+    } catch {
+      onError('Response body must be valid JSON before saving. Finish the JSON object/array, then click outside the editor.');
+    }
+  }
+  return (
+    <section className="response-viewer">
+      <div className="response-toolbar">
+        <div className="tabs">
+          <button className={mode === 'json' ? 'active' : ''} onClick={() => onModeChange('json')}>JSON</button>
+          <button className={mode === 'raw' ? 'active' : ''} onClick={() => onModeChange('raw')}>Raw</button>
+        </div>
+        <label className="wrap-toggle">
+          <input type="checkbox" checked={wrap} onChange={(event) => onWrapChange(event.target.checked)} />
+          Wrap lines
+        </label>
+      </div>
+      <textarea
+        className={`response-code ${wrap ? 'wrap' : ''}`}
+        value={display}
+        wrap={wrap ? 'soft' : 'off'}
+        spellCheck={false}
+        onChange={(event) => onDraftChange(event.target.value)}
+        onBlur={(event) => commit(event.target.value)}
+      />
+    </section>
+  );
+}
+
+function JsonEditor({
+  label,
+  value,
+  draft,
+  onDraftChange,
+  onChange,
+  onError
+}: {
+  label: string;
+  value: unknown;
+  draft?: string;
+  onDraftChange: (value: string | undefined) => void;
+  onChange: (value: unknown) => void;
+  onError: (message: string) => void;
+}): React.ReactElement {
+  const text = draft ?? jsonPretty(value);
+  function commit(nextText: string): void {
+    try {
+      onChange(parseJsonInput(nextText));
+      onDraftChange(undefined);
+    } catch {
+      onError(`${label} must be valid JSON before saving. Finish the JSON first, then click outside the editor.`);
+    }
+  }
+  return (
+    <label>
+      {label}
+      <textarea
+        value={text}
+        spellCheck={false}
+        onChange={(event) => onDraftChange(event.target.value)}
+        onBlur={(event) => commit(event.target.value)}
+      />
+    </label>
+  );
+}
+
 export default function App(): React.ReactElement {
   const [imports, setImportForm] = useState<ImportFormState>(emptyImport);
   const [mocks, setMocks] = useState<MockDefinition[]>([]);
   const [selectedMockId, setSelectedMockId] = useState<string | null>(null);
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null);
   const [selectedMock, setSelectedMock] = useState<EditorState>(null);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [message, setMessage] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [showCapture, setShowCapture] = useState(true);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [mocksExpanded, setMocksExpanded] = useState(true);
+  const [responseViewMode, setResponseViewMode] = useState<ResponseViewMode>('json');
+  const [responseWrap, setResponseWrap] = useState(true);
+  const [jsonDrafts, setJsonDrafts] = useState<JsonDrafts>({});
+  const [enabledMockIds, setEnabledMockIds] = useState<Set<string>>(new Set());
+  const [mockSessionRunning, setMockSessionRunning] = useState(false);
+  const enabledMocksTouched = useRef(false);
+
+  function setJsonDraft(key: string, value: string | undefined): void {
+    setJsonDrafts((current) => {
+      const next = { ...current };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  }
+
+  function mockWithJsonDrafts(): MockDefinition | null {
+    const entries = Object.entries(jsonDrafts);
+    if (!selectedMock) return null;
+    if (!entries.length) return selectedMock;
+
+    const parsedDrafts = new Map<string, Partial<MockEndpoint>>();
+    for (const [key, text] of entries) {
+      const parsedKey = parseDraftKey(key);
+      if (!parsedKey) continue;
+      try {
+        const value = parsedKey.field === 'responseExample' && responseViewMode === 'raw' ? text : parseJsonInput(text);
+        parsedDrafts.set(parsedKey.endpointId, {
+          ...parsedDrafts.get(parsedKey.endpointId),
+          [parsedKey.field]: parsedKey.field === 'requestHeaders' ? (value ?? {}) : value
+        });
+      } catch {
+        setMessage(`${parsedKey.field} has invalid JSON. Fix it before saving or closing.`);
+        return null;
+      }
+    }
+
+    return {
+      ...selectedMock,
+      endpoints: selectedMock.endpoints.map((endpoint) => (
+        parsedDrafts.has(endpoint.id) ? { ...endpoint, ...parsedDrafts.get(endpoint.id) } : endpoint
+      ))
+    };
+  }
 
   async function handleFileSelected(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
     const file = event.target.files?.[0];
@@ -74,6 +234,10 @@ export default function App(): React.ReactElement {
   async function refreshAll(nextSelectedId = selectedMockId): Promise<void> {
     const nextMocks = await listMocks();
     setMocks(nextMocks);
+    setEnabledMockIds((current) => {
+      if (!enabledMocksTouched.current) return new Set(nextMocks.map((mock) => mock.id));
+      return new Set(nextMocks.filter((mock) => current.has(mock.id)).map((mock) => mock.id));
+    });
     const current = nextSelectedId ? nextMocks.find((mock) => mock.id === nextSelectedId) ?? null : null;
     setSelectedMock(current);
     setSelectedEndpointId((prev) => {
@@ -81,17 +245,20 @@ export default function App(): React.ReactElement {
       const endpoint = current.endpoints.find((item) => item.id === prev) ?? current.endpoints[0];
       return endpoint?.id ?? null;
     });
-    setLogs(await listLogs(nextSelectedId ?? undefined));
   }
 
   useEffect(() => {
     void refreshAll();
+    void getMockSessionStatus()
+      .then((status) => {
+        setMockSessionRunning(status.running);
+        if (status.enabledMockIds.length || status.running) {
+          enabledMocksTouched.current = true;
+          setEnabledMockIds(new Set(status.enabledMockIds));
+        }
+      })
+      .catch(() => {});
   }, []);
-
-  const selectedEndpoint = useMemo(() => {
-    if (!selectedMock || !selectedEndpointId) return null;
-    return selectedMock.endpoints.find((endpoint) => endpoint.id === selectedEndpointId) ?? null;
-  }, [selectedMock, selectedEndpointId]);
 
   async function handleImport(): Promise<void> {
     if (!imports.name.trim() || !imports.content.trim()) {
@@ -111,6 +278,9 @@ export default function App(): React.ReactElement {
       setMessage(`Imported ${imported.name}`);
       setImportForm(emptyImport);
       setSelectedMockId(imported.id);
+      setSelectedEndpointId(imported.endpoints[0]?.id ?? null);
+      setJsonDrafts({});
+      setEditorOpen(true);
       await refreshAll(imported.id);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -145,7 +315,11 @@ export default function App(): React.ReactElement {
       await deleteMock(id);
       const remaining = mocks.filter((mock) => mock.id !== id);
       setMocks(remaining);
+      const nextEnabled = new Set(Array.from(enabledMockIds).filter((mockId) => mockId !== id));
+      setEnabledMockIds(nextEnabled);
+      if (mockSessionRunning) await setMockSessionEnabled(Array.from(nextEnabled));
       setSelectedMockId(remaining[0]?.id ?? null);
+      if (selectedMockId === id) setEditorOpen(false);
       await refreshAll(remaining[0]?.id);
     } finally {
       setBusy(false);
@@ -154,11 +328,33 @@ export default function App(): React.ReactElement {
 
   async function handleSaveSelected(): Promise<void> {
     if (!selectedMock) return;
+    const mockToSave = mockWithJsonDrafts();
+    if (!mockToSave) return;
+    setSelectedMock(mockToSave);
+    setJsonDrafts({});
     setBusy(true);
     try {
-      await saveMock(selectedMock);
-      await refreshAll(selectedMock.id);
-      setMessage(`Saved ${selectedMock.name}`);
+      await saveMock(mockToSave);
+      await refreshAll(mockToSave.id);
+      setMessage(`Saved ${mockToSave.name}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCloseEditor(): Promise<void> {
+    const nextMock = mockWithJsonDrafts();
+    if (!nextMock) return;
+    setSelectedMock(nextMock);
+    setJsonDrafts({});
+    setBusy(true);
+    try {
+      await saveMock(nextMock);
+      await refreshAll(nextMock.id);
+      setMessage(`Saved ${nextMock.name}`);
+      setEditorOpen(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -172,6 +368,66 @@ export default function App(): React.ReactElement {
     try {
       await syncMock(selectedMock.id);
       await refreshAll(selectedMock.id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncEnabledMocks(nextEnabled: Set<string>, userMessage?: string): Promise<void> {
+    enabledMocksTouched.current = true;
+    setEnabledMockIds(nextEnabled);
+    if (mockSessionRunning) {
+      const status = await setMockSessionEnabled(Array.from(nextEnabled));
+      setMockSessionRunning(status.running);
+    }
+    if (userMessage) setMessage(userMessage);
+  }
+
+  async function handleToggleMockEnabled(mock: MockDefinition): Promise<void> {
+    const nextEnabled = new Set(enabledMockIds);
+    if (nextEnabled.has(mock.id)) {
+      nextEnabled.delete(mock.id);
+      await syncEnabledMocks(nextEnabled, `${mock.name} disabled for the mock session.`);
+    } else {
+      nextEnabled.add(mock.id);
+      await syncEnabledMocks(nextEnabled, `${mock.name} enabled for the mock session.`);
+    }
+  }
+
+  async function handleEnableAllMocks(): Promise<void> {
+    await syncEnabledMocks(new Set(mocks.map((mock) => mock.id)), 'All mocks enabled for the mock session.');
+  }
+
+  async function handleDisableAllMocks(): Promise<void> {
+    await syncEnabledMocks(new Set(), 'All mocks disabled for the mock session.');
+  }
+
+  async function handleStartMockSession(): Promise<void> {
+    setBusy(true);
+    try {
+      const mockIds = enabledMockIds.size || enabledMocksTouched.current ? Array.from(enabledMockIds) : mocks.map((mock) => mock.id);
+      if (!enabledMocksTouched.current && mocks.length) {
+        enabledMocksTouched.current = true;
+        setEnabledMockIds(new Set(mockIds));
+      }
+      const status = await startMockSession(mockIds);
+      setMockSessionRunning(status.running);
+      setMessage(`Started a clean mock browser session with ${status.enabledMockIds.length} enabled mock${status.enabledMockIds.length === 1 ? '' : 's'}. Navigate to your app in the opened browser.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleStopMockSession(): Promise<void> {
+    setBusy(true);
+    try {
+      const status = await stopMockSession();
+      setMockSessionRunning(status.running);
+      setMessage('Stopped the mock browser session.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }
@@ -218,6 +474,7 @@ export default function App(): React.ReactElement {
       orderIndex: selectedMock.endpoints.length
     };
     setSelectedMock({ ...selectedMock, endpoints: [...selectedMock.endpoints, endpoint] });
+    setJsonDrafts({});
     setSelectedEndpointId(endpoint.id);
   }
 
@@ -230,6 +487,7 @@ export default function App(): React.ReactElement {
     if (selectedEndpointId === endpointId) {
       setSelectedEndpointId(selectedMock.endpoints[0]?.id ?? null);
     }
+    setJsonDrafts({});
   }
 
   return (
@@ -342,25 +600,52 @@ export default function App(): React.ReactElement {
           <div className="panel-head">
             <div>
               <h2>Available Mocks</h2>
-              <div className="hint">Select a mock to inspect, edit, or control its local server.</div>
+              <div className="hint">
+                {mocks.length} mock{mocks.length === 1 ? '' : 's'} available · {enabledMockIds.size} enabled
+                {mockSessionRunning ? ' · session running' : ''}
+              </div>
+            </div>
+            <div className="mocks-panel-actions">
+              <button className="secondary" disabled={busy || !mocks.length} onClick={() => void handleStartMockSession()}>
+                Start Mock Session
+              </button>
+              <button className="secondary" disabled={busy || !mockSessionRunning} onClick={() => void handleStopMockSession()}>
+                Stop Session
+              </button>
+              <button className="secondary slim-button hover-action" disabled={busy || !mocks.length} onClick={() => void handleEnableAllMocks()}>
+                Enable all
+              </button>
+              <button className="secondary slim-button hover-action" disabled={busy || !mocks.length} onClick={() => void handleDisableAllMocks()}>
+                Disable all
+              </button>
+              <button className="secondary slim-button" onClick={() => setMocksExpanded((expanded) => !expanded)}>
+                {mocksExpanded ? 'Collapse' : 'Expand'}
+              </button>
             </div>
           </div>
-          {mocks.length ? (
+          {mocksExpanded && mocks.length ? (
             <div className="mock-grid">
               {mocks.map((mock) => {
                 const runtime = mock.status === 'running' && mock.port ? `Port ${mock.port}` : mock.status;
+                const mockEnabled = enabledMockIds.has(mock.id);
                 return (
                   <button
                     key={mock.id}
-                    className={`mock-card ${selectedMockId === mock.id ? 'selected' : ''}`}
-                    onClick={() => {
-                      setSelectedMockId(mock.id);
-                      setSelectedMock(mock);
-                    }}
+                    className={`mock-card ${selectedMockId === mock.id ? 'selected' : ''} ${mockEnabled ? 'enabled' : 'disabled'}`}
+                  onClick={() => {
+                    setSelectedMockId(mock.id);
+                    setSelectedMock(mock);
+                    setSelectedEndpointId(mock.endpoints[0]?.id ?? null);
+                    setJsonDrafts({});
+                    setEditorOpen(true);
+                  }}
                   >
                     <div className="mock-head">
-                      <strong>{mock.name}</strong>
-                      <span className={`status ${mock.status}`}>{runtime}</span>
+                      <strong title={mock.name}>{mock.name}</strong>
+                      <span className="mock-badges">
+                        <span className={`status ${mockEnabled ? 'enabled' : 'disabled'}`}>{mockEnabled ? 'enabled' : 'off'}</span>
+                        <span className={`status ${mock.status}`}>{runtime}</span>
+                      </span>
                     </div>
                     <div className="mock-meta">
                       <span>{mock.protocol.toUpperCase()}</span>
@@ -372,10 +657,23 @@ export default function App(): React.ReactElement {
                           Stop
                         </span>
                       ) : (
-                        <span className="action-link" onClick={(event) => { event.stopPropagation(); void handleStart(mock.id); }}>
+                      <span className="action-link" onClick={(event) => { event.stopPropagation(); void handleStart(mock.id); }}>
                           Start
                         </span>
                       )}
+                      <span className="action-link" onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedMockId(mock.id);
+                        setSelectedMock(mock);
+                        setSelectedEndpointId(mock.endpoints[0]?.id ?? null);
+                        setJsonDrafts({});
+                        setEditorOpen(true);
+                      }}>
+                        Edit
+                      </span>
+                      <span className="action-link" onClick={(event) => { event.stopPropagation(); void handleToggleMockEnabled(mock); }}>
+                        {mockEnabled ? 'Disable' : 'Enable'}
+                      </span>
                       <span className="action-link danger" onClick={(event) => { event.stopPropagation(); void handleDelete(mock.id); }}>
                         Delete
                       </span>
@@ -384,9 +682,10 @@ export default function App(): React.ReactElement {
                 );
               })}
             </div>
-          ) : (
+          ) : null}
+          {mocksExpanded && !mocks.length ? (
             <div className="mock-empty">No mocks yet. Import a definition to create the first one.</div>
-          )}
+          ) : null}
         </section>
 
         {showCapture ? (
@@ -394,13 +693,25 @@ export default function App(): React.ReactElement {
             onMockCreated={async (mock) => {
               setSelectedMockId(mock.id);
               setSelectedMock(mock);
+              setSelectedEndpointId(mock.endpoints[0]?.id ?? null);
+              setJsonDrafts({});
+              setEditorOpen(true);
               await refreshAll(mock.id);
             }}
           />
         ) : null}
 
-        {selectedMock ? (
-          <section className="grid">
+        {selectedMock && editorOpen ? (
+          <div className="dialog-overlay" role="dialog" aria-modal="true" aria-label="Mock editor">
+            <section className="mock-dialog">
+              <div className="dialog-titlebar">
+                <div>
+                  <h2>Edit Mock</h2>
+                  <span>{selectedMock.name}</span>
+                </div>
+                <button className="secondary" disabled={busy} onClick={() => void handleCloseEditor()}>Save & Close</button>
+              </div>
+              <div className="dialog-grid">
             <article className="panel editor">
               <div className="panel-head">
                 <h2>Mock Editor</h2>
@@ -523,58 +834,44 @@ export default function App(): React.ReactElement {
                             </label>
                           </div>
 
-                          <label>
-                            Request headers
-                            <textarea
-                              value={jsonPretty(endpoint.requestHeaders)}
-                              onChange={(event) => {
-                                try {
-                                  updateEndpoint(endpoint.id, { requestHeaders: JSON.parse(event.target.value) });
-                                } catch {
-                                  setMessage('Request headers must be valid JSON.');
-                                }
-                              }}
+                          <JsonEditor
+                            label="Request headers"
+                            value={endpoint.requestHeaders}
+                            draft={jsonDrafts[jsonDraftKey(endpoint.id, 'requestHeaders')]}
+                            onDraftChange={(value) => setJsonDraft(jsonDraftKey(endpoint.id, 'requestHeaders'), value)}
+                            onChange={(value) => updateEndpoint(endpoint.id, { requestHeaders: (value ?? {}) as Record<string, string> })}
+                            onError={setMessage}
+                          />
+                          <JsonEditor
+                            label="Request schema"
+                            value={endpoint.requestBodySchema}
+                            draft={jsonDrafts[jsonDraftKey(endpoint.id, 'requestBodySchema')]}
+                            onDraftChange={(value) => setJsonDraft(jsonDraftKey(endpoint.id, 'requestBodySchema'), value)}
+                            onChange={(value) => updateEndpoint(endpoint.id, { requestBodySchema: value })}
+                            onError={setMessage}
+                          />
+                          <JsonEditor
+                            label="Response schema"
+                            value={endpoint.responseSchema}
+                            draft={jsonDrafts[jsonDraftKey(endpoint.id, 'responseSchema')]}
+                            onDraftChange={(value) => setJsonDraft(jsonDraftKey(endpoint.id, 'responseSchema'), value)}
+                            onChange={(value) => updateEndpoint(endpoint.id, { responseSchema: value })}
+                            onError={setMessage}
+                          />
+                          <div className="stretch">
+                            <div className="field-label">Response example</div>
+                            <ResponseViewer
+                              value={endpoint.responseExample}
+                              draft={jsonDrafts[jsonDraftKey(endpoint.id, 'responseExample')]}
+                              mode={responseViewMode}
+                              wrap={responseWrap}
+                              onModeChange={setResponseViewMode}
+                              onWrapChange={setResponseWrap}
+                              onDraftChange={(value) => setJsonDraft(jsonDraftKey(endpoint.id, 'responseExample'), value)}
+                              onChange={(value) => updateEndpoint(endpoint.id, { responseExample: value })}
+                              onError={setMessage}
                             />
-                          </label>
-                          <label>
-                            Request schema
-                            <textarea
-                              value={jsonPretty(endpoint.requestBodySchema)}
-                              onChange={(event) => {
-                                try {
-                                  updateEndpoint(endpoint.id, { requestBodySchema: parseJsonInput(event.target.value) });
-                                } catch {
-                                  setMessage('Request schema must be valid JSON.');
-                                }
-                              }}
-                            />
-                          </label>
-                          <label>
-                            Response schema
-                            <textarea
-                              value={jsonPretty(endpoint.responseSchema)}
-                              onChange={(event) => {
-                                try {
-                                  updateEndpoint(endpoint.id, { responseSchema: parseJsonInput(event.target.value) });
-                                } catch {
-                                  setMessage('Response schema must be valid JSON.');
-                                }
-                              }}
-                            />
-                          </label>
-                          <label>
-                            Response example
-                            <textarea
-                              value={jsonPretty(endpoint.responseExample)}
-                              onChange={(event) => {
-                                try {
-                                  updateEndpoint(endpoint.id, { responseExample: parseJsonInput(event.target.value) });
-                                } catch {
-                                  setMessage('Response example must be valid JSON.');
-                                }
-                              }}
-                            />
-                          </label>
+                          </div>
                           <div className="endpoint-actions">
                             <button className="secondary" onClick={() => void handleRowSeed(endpoint)}>
                               Seed data
@@ -590,61 +887,10 @@ export default function App(): React.ReactElement {
                 })}
               </div>
             </article>
-
-            <article className="panel inspector">
-              <h2>Live Inspector</h2>
-              <div className="inspector-block">
-                <div className="inspector-row">
-                  <span>Status</span>
-                  <strong className={`status ${selectedMock.status}`}>{selectedMock.status}</strong>
-                </div>
-                <div className="inspector-row">
-                  <span>Port</span>
-                  <strong>{selectedMock.port ?? 'not assigned'}</strong>
-                </div>
-                <div className="inspector-row">
-                  <span>Endpoints</span>
-                  <strong>{selectedMock.endpoints.length}</strong>
-                </div>
               </div>
-
-              {selectedEndpoint ? (
-                <div className="inspector-block">
-                  <h3>{selectedEndpoint.name}</h3>
-                  <div className="mono">{selectedEndpoint.method} {selectedEndpoint.path}</div>
-                  <div className="inspector-row">
-                    <span>Table</span>
-                    <strong>{selectedEndpoint.tableName || 'pending save'}</strong>
-                  </div>
-                  <div className="inspector-row">
-                    <span>Schema</span>
-                    <strong>{selectedEndpoint.responseSchema ? 'yes' : 'no'}</strong>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="inspector-block">
-                <h3>Logs</h3>
-                <div className="log-list">
-                  {logs.map((log) => (
-                    <div key={log.id} className={`log-item ${log.level}`}>
-                      <div className="log-head">
-                        <strong>{log.level.toUpperCase()}</strong>
-                        <span>{new Date(log.createdAt).toLocaleString()}</span>
-                      </div>
-                      <div>{log.message}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </article>
-          </section>
-        ) : (
-          <section className="panel empty-state">
-            <h2>No mock selected</h2>
-            <p>Import a definition, capture traffic, or pick a mock from the list.</p>
-          </section>
-        )}
+            </section>
+          </div>
+        ) : null}
 
         {message ? <div className="toast">{message}</div> : null}
       </main>

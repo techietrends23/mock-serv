@@ -76,3 +76,28 @@ export async function createMockFromCall(
     body: JSON.stringify(options || {})
   });
 }
+
+export interface AiStatus {
+  enabled: boolean;
+  baseUrl?: string;
+  message: string;
+}
+
+export interface AiSuggestionResult {
+  suggestion: string;
+  sessionId: string;
+  analyzedCalls: number;
+  domains: string[];
+}
+
+export async function getAiStatus(): Promise<AiStatus> {
+  return request<AiStatus>('/ai/status');
+}
+
+export async function suggestMocks(input: { requirement: string; sessionId?: string; domains?: string[] }): Promise<AiSuggestionResult> {
+  return request<AiSuggestionResult>('/ai/suggest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+}

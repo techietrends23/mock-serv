@@ -4,6 +4,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { MockDefinition, MockEndpoint } from '@mock-serv/core';
 import { MockService } from '@mock-serv/core';
 import { registerCaptureRoutes } from './capture-routes.ts';
+import { registerAiRoutes } from './ai-routes.ts';
+import { registerTestBrowserRoutes } from './test-browser.ts';
 
 export interface BuildServerOptions {
   dataDir?: string;
@@ -123,6 +125,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
   );
 
   registerCaptureRoutes(server, service);
+  registerAiRoutes(server, service);
+  registerTestBrowserRoutes(server, service);
 
   if (uiDistDir && fs.existsSync(uiDistDir)) {
     server.get('/', async (_request, reply) => {

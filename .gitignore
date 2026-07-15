@@ -9,3 +9,5 @@ out
 *.tsbuildinfo
 coverage
 .DS_Store
+llm-model/
+*.gguf

@@ -88,6 +88,47 @@ export async function syncMock(mockId: string): Promise<MockDefinition> {
   });
 }
 
+export async function openMockTestBrowser(mockId: string, url?: string): Promise<{ ok: boolean; targetUrl: string; mockedEndpoints: string[] }> {
+  return request<{ ok: boolean; targetUrl: string; mockedEndpoints: string[] }>(`/mocks/${encodeURIComponent(mockId)}/test-browser`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ url })
+  });
+}
+
+export interface MockSessionStatus {
+  ok: boolean;
+  running: boolean;
+  enabledMockIds: string[];
+  targetUrl: string;
+}
+
+export async function getMockSessionStatus(): Promise<MockSessionStatus> {
+  return request<MockSessionStatus>('/mock-session/status');
+}
+
+export async function startMockSession(mockIds: string[]): Promise<MockSessionStatus> {
+  return request<MockSessionStatus>('/mock-session/start', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mockIds })
+  });
+}
+
+export async function stopMockSession(): Promise<MockSessionStatus> {
+  return request<MockSessionStatus>('/mock-session/stop', {
+    method: 'POST'
+  });
+}
+
+export async function setMockSessionEnabled(mockIds: string[]): Promise<MockSessionStatus> {
+  return request<MockSessionStatus>('/mock-session/enabled', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mockIds })
+  });
+}
+
 export async function upsertEndpoint(
   mockId: string,
   endpoint: Partial<MockEndpoint> & Pick<MockEndpoint, 'method' | 'path' | 'name'>
