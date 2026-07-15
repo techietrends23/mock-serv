@@ -71,7 +71,21 @@ export class GraphQLRuntime {
           )
         }
       }),
-      graphqlEndpoint: '/graphql'
+      graphqlEndpoint: '/graphql',
+      cors: {
+        origin: '*',
+        credentials: true,
+        methods: ['GET', 'POST', 'OPTIONS'],
+        allowedHeaders: [
+          'content-type',
+          'authorization',
+          'apollographql-client-name',
+          'apollographql-client-version',
+          'x-apollo-operation-name',
+          'x-requested-with',
+          'accept'
+        ]
+      }
     });
 
     const server = http.createServer(yoga);

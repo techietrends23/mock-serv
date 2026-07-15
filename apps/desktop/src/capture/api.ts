@@ -68,12 +68,30 @@ export async function deleteCapturedCall(sessionId: string, callId: string): Pro
 export async function createMockFromCall(
   sessionId: string,
   callId: string,
-  options?: { name?: string; description?: string }
+  options?: { name?: string; description?: string; autoWire?: boolean }
 ): Promise<MockDefinition> {
   return request<MockDefinition>(`/capture/sessions/${encodeURIComponent(sessionId)}/calls/${encodeURIComponent(callId)}/mock`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(options || {})
+  });
+}
+
+export interface CreateMocksFromDomainsResult {
+  mocks: MockDefinition[];
+  domains: string[];
+  autoWired: boolean;
+}
+
+export async function createMocksFromDomains(
+  sessionId: string,
+  domains: string[],
+  options?: { autoWire?: boolean }
+): Promise<CreateMocksFromDomainsResult> {
+  return request<CreateMocksFromDomainsResult>(`/capture/sessions/${encodeURIComponent(sessionId)}/mocks-from-domains`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ domains, autoWire: options?.autoWire })
   });
 }
 
@@ -90,12 +108,86 @@ export interface AiSuggestionResult {
   domains: string[];
 }
 
+export interface MockAnalysisPlan {
+  explanation: string;
+  deleteDomains?: string[];
+  createMocks?: Array<{
+    name?: string;
+    fromCallIds: string[];
+    notes?: string;
+  }>;
+  relatedCallIds?: string[];
+  warnings?: string[];
+  nextSteps?: string[];
+}
+
+export interface AiAnalyzeResult {
+  sessionId: string;
+  analyzedCalls: number;
+  domains: string[];
+  plan: MockAnalysisPlan;
+  raw?: string;
+}
+
+export interface AiCreateFromPlanResult {
+  sessionId: string;
+  created: MockDefinition[];
+  skipped: Array<{ reason: string; fromCallIds: string[] }>;
+  autoWired: boolean;
+}
+
+export interface AiDiagnoseResult {
+  sessionId: string;
+  analyzedCalls: number;
+  domains: string[];
+  networkEntries: number;
+  diagnosis: {
+    explanation: string;
+    likelyCauses: string[];
+    missingOperations?: string[];
+    createFromCallIds?: string[];
+    adjustExisting?: Array<{ mockId: string; reason: string; suggestedBodyContains?: string }>;
+    relatedCallIds?: string[];
+    nextSteps: string[];
+    warnings?: string[];
+  };
+  raw?: string;
+}
+
 export async function getAiStatus(): Promise<AiStatus> {
   return request<AiStatus>('/ai/status');
 }
 
 export async function suggestMocks(input: { requirement: string; sessionId?: string; domains?: string[] }): Promise<AiSuggestionResult> {
   return request<AiSuggestionResult>('/ai/suggest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function analyzeMocks(input: { requirement: string; sessionId?: string; domains?: string[] }): Promise<AiAnalyzeResult> {
+  return request<AiAnalyzeResult>('/ai/analyze', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function createMocksFromPlan(input: {
+  sessionId?: string;
+  autoWire?: boolean;
+  plan: MockAnalysisPlan;
+}): Promise<AiCreateFromPlanResult> {
+  return request<AiCreateFromPlanResult>('/ai/create-from-plan', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function diagnoseMocks(input: { requirement: string; sessionId?: string; domains?: string[] }): Promise<AiDiagnoseResult> {
+  return request<AiDiagnoseResult>('/ai/diagnose', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input)

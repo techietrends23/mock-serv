@@ -16,6 +16,7 @@ import {
   syncMock
 } from './api';
 import type { MockDefinition, MockEndpoint, MockProtocol, MockSourceType } from '@mock-serv/core';
+import { rulesFromShortcuts, shortcutFromRules } from '@mock-serv/core';
 import CapturePanel from './capture/CapturePanel';
 
 type ImportFormState = {
@@ -433,6 +434,41 @@ export default function App(): React.ReactElement {
     }
   }
 
+  async function ensureMockSessionRunning(extraMockIds: string[] = []): Promise<void> {
+    enabledMocksTouched.current = true;
+    const mockIds = Array.from(new Set([...enabledMockIds, ...extraMockIds]));
+    setEnabledMockIds(new Set(mockIds));
+
+    if (mockSessionRunning) {
+      const status = await setMockSessionEnabled(mockIds);
+      setMockSessionRunning(status.running);
+      return;
+    }
+
+    const status = await startMockSession(mockIds);
+    setMockSessionRunning(status.running);
+  }
+
+  async function wireMockToLocalhost(mock: MockDefinition): Promise<void> {
+    try {
+      const running = mock.status === 'running' ? mock : await startMock(mock.id);
+      await ensureMockSessionRunning([running.id]);
+      await refreshAll(running.id);
+      const host = (() => {
+        try {
+          return running.sourceRef ? new URL(running.sourceRef).host : 'the captured domain';
+        } catch {
+          return 'the captured domain';
+        }
+      })();
+      setMessage(
+        `Mock "${running.name}" is running on localhost${running.port ? `:${running.port}` : ''}. ${host} is routed to it in the mock browser session — open your app there.`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function handleRowSeed(endpoint: MockEndpoint): Promise<void> {
     if (!selectedMock) return;
     const rows = await listRows(selectedMock.id, endpoint.id);
@@ -697,6 +733,33 @@ export default function App(): React.ReactElement {
               setJsonDrafts({});
               setEditorOpen(true);
               await refreshAll(mock.id);
+              await wireMockToLocalhost(mock);
+            }}
+            onMocksCreated={async (created) => {
+              if (!created.length) return;
+              const primary = created[0]!;
+              setSelectedMockId(primary.id);
+              setSelectedMock(primary);
+              setSelectedEndpointId(primary.endpoints[0]?.id ?? null);
+              setJsonDrafts({});
+              setEditorOpen(true);
+              for (const mock of created) {
+                if (mock.status !== 'running') await startMock(mock.id);
+              }
+              await ensureMockSessionRunning(created.map((mock) => mock.id));
+              await refreshAll(primary.id);
+              const hosts = created
+                .map((mock) => {
+                  try {
+                    return mock.sourceRef ? new URL(mock.sourceRef).host : null;
+                  } catch {
+                    return null;
+                  }
+                })
+                .filter((host): host is string => Boolean(host));
+              setMessage(
+                `Created ${created.length} mock${created.length === 1 ? '' : 's'}. ${hosts.join(', ') || 'Selected domains'} now route to localhost in the mock browser session — open your app there.`
+              );
             }}
           />
         ) : null}
@@ -768,6 +831,26 @@ export default function App(): React.ReactElement {
                   Description
                   <input value={selectedMock.description ?? ''} onChange={(event) => updateSelectedMock({ description: event.target.value })} />
                 </label>
+                <label className="stretch">
+                  <span className="field-label">Proxy unmatched requests (Mockoon-style)</span>
+                  <div className="inline-check">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedMock.proxyEnabled)}
+                      onChange={(event) => updateSelectedMock({ proxyEnabled: event.target.checked })}
+                    />
+                    <span>Forward non-matching calls to proxy URL</span>
+                  </div>
+                </label>
+                <label className="stretch">
+                  Proxy URL
+                  <input
+                    value={selectedMock.proxyUrl ?? selectedMock.sourceRef ?? ''}
+                    placeholder="https://api.example.com"
+                    onChange={(event) => updateSelectedMock({ proxyUrl: event.target.value || undefined })}
+                    disabled={!selectedMock.proxyEnabled}
+                  />
+                </label>
               </div>
 
               <div className="endpoint-list">
@@ -830,6 +913,36 @@ export default function App(): React.ReactElement {
                                 step="0.05"
                                 value={endpoint.errorRate}
                                 onChange={(event) => updateEndpoint(endpoint.id, { errorRate: Number(event.target.value) })}
+                              />
+                            </label>
+                            <label className="stretch">
+                              Body contains
+                              <input
+                                value={shortcutFromRules(endpoint.matchRules).bodyContains}
+                                placeholder="GetCompleteTheLookGMRecommendations"
+                                onChange={(event) =>
+                                  updateEndpoint(endpoint.id, {
+                                    matchRules: rulesFromShortcuts({
+                                      ...shortcutFromRules(endpoint.matchRules),
+                                      bodyContains: event.target.value
+                                    })
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="stretch">
+                              URL contains
+                              <input
+                                value={shortcutFromRules(endpoint.matchRules).urlContains}
+                                placeholder="/gateway/graphql"
+                                onChange={(event) =>
+                                  updateEndpoint(endpoint.id, {
+                                    matchRules: rulesFromShortcuts({
+                                      ...shortcutFromRules(endpoint.matchRules),
+                                      urlContains: event.target.value
+                                    })
+                                  })
+                                }
                               />
                             </label>
                           </div>

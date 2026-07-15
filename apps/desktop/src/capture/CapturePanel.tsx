@@ -1,10 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CapturedCall, CaptureSession, MockDefinition } from '@mock-serv/core';
 import {
+  analyzeMocks,
   createCaptureSession,
   createMockFromCall,
+  createMocksFromDomains,
+  createMocksFromPlan,
   deleteCapturedCall,
   deleteCaptureSession,
+  diagnoseMocks,
   getAiStatus,
   listCapturedCalls,
   listCaptureSessions,
@@ -12,11 +16,25 @@ import {
   startCaptureSession,
   stopCaptureSession
 } from './api';
-import type { AiStatus, AiSuggestionResult } from './api';
+import type {
+  AiAnalyzeResult,
+  AiDiagnoseResult,
+  AiStatus,
+  AiSuggestionResult,
+  MockAnalysisPlan
+} from './api';
 
 interface CapturePanelProps {
   onMockCreated?: (mock: MockDefinition) => void | Promise<void>;
+  onMocksCreated?: (mocks: MockDefinition[]) => void | Promise<void>;
 }
+
+type AssistantMode = 'ask' | 'analyze' | 'diagnose';
+
+type AssistantView =
+  | { kind: 'suggest'; data: AiSuggestionResult }
+  | { kind: 'analyze'; data: AiAnalyzeResult }
+  | { kind: 'diagnose'; data: AiDiagnoseResult };
 
 function formatTime(value: string): string {
   if (!value) return '-';
@@ -42,7 +60,13 @@ function bodyPreview(value: unknown): string {
   return text.length > 180 ? `${text.slice(0, 180)}...` : text;
 }
 
-export default function CapturePanel({ onMockCreated }: CapturePanelProps): React.ReactElement {
+function callLabel(calls: CapturedCall[], callId: string): string {
+  const call = calls.find((item) => item.id === callId);
+  if (!call) return callId;
+  return `${call.method} ${call.path}`;
+}
+
+export default function CapturePanel({ onMockCreated, onMocksCreated }: CapturePanelProps): React.ReactElement {
   const [sessions, setSessions] = useState<CaptureSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [calls, setCalls] = useState<CapturedCall[]>([]);
@@ -52,9 +76,11 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
   const [domainMenuOpen, setDomainMenuOpen] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [assistantPrompt, setAssistantPrompt] = useState('');
-  const [assistantResult, setAssistantResult] = useState<AiSuggestionResult | null>(null);
+  const [assistantMode, setAssistantMode] = useState<AssistantMode>('analyze');
+  const [assistantView, setAssistantView] = useState<AssistantView | null>(null);
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -118,22 +144,6 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
     });
   }
 
-  function selectVisibleCalls(): void {
-    setSelectedCallIds((current) => {
-      const next = new Set(current);
-      visibleIds.forEach((id) => next.add(id));
-      return next;
-    });
-  }
-
-  function clearVisibleSelection(): void {
-    setSelectedCallIds((current) => {
-      const next = new Set(current);
-      visibleIds.forEach((id) => next.delete(id));
-      return next;
-    });
-  }
-
   function toggleDomain(domain: string): void {
     setSelectedDomains((current) => {
       const next = new Set(current);
@@ -149,21 +159,29 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
 
   function clearDomains(): void {
     setSelectedDomains(new Set());
-    setSelectedCallIds(new Set());
+  }
+
+  function selectVisibleCalls(): void {
+    setSelectedCallIds(new Set(visibleIds));
+  }
+
+  function clearVisibleSelection(): void {
+    setSelectedCallIds((current) => {
+      const next = new Set(current);
+      for (const id of visibleIds) next.delete(id);
+      return next;
+    });
   }
 
   async function handleCreateSession(): Promise<void> {
-    if (!newSessionName.trim()) {
-      setMessage('Enter a session name.');
-      return;
-    }
+    if (!newSessionName.trim()) return;
     setBusy(true);
     try {
       const session = await createCaptureSession(newSessionName.trim());
       setNewSessionName('');
       await refreshSessions();
       setSelectedSessionId(session.id);
-      setMessage('Session ready.');
+      setMessage(`Session "${session.name}" created.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -176,7 +194,7 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
     try {
       await startCaptureSession(sessionId);
       await refreshSessions();
-      setMessage('Capture started. A browser window will open.');
+      setMessage('Capture browser started.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -189,7 +207,6 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
     try {
       await stopCaptureSession(sessionId);
       await refreshSessions();
-      await refreshCalls(sessionId);
       setMessage('Capture stopped.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -202,30 +219,9 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
     setBusy(true);
     try {
       await deleteCaptureSession(sessionId);
-      setCalls([]);
-      setSelectedCallIds(new Set());
       await refreshSessions();
       if (selectedSessionId === sessionId) setSelectedSessionId(null);
       setMessage('Session deleted.');
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDeleteDomains(): Promise<void> {
-    if (!selectedSessionId || !selectedDomains.size) return;
-    const domainCallIds = calls.filter((call) => selectedDomains.has(callHost(call))).map((call) => call.id);
-    if (!domainCallIds.length) return;
-    setBusy(true);
-    try {
-      await Promise.all(domainCallIds.map((callId) => deleteCapturedCall(selectedSessionId, callId)));
-      setSelectedCallIds(new Set());
-      setSelectedDomains(new Set());
-      await refreshCalls(selectedSessionId);
-      await refreshSessions();
-      setMessage(`Deleted ${domainCallIds.length} call${domainCallIds.length === 1 ? '' : 's'} from selected domain${selectedDomains.size === 1 ? '' : 's'}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -240,7 +236,23 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
       await deleteCapturedCall(selectedSessionId, call.id);
       await refreshCalls(selectedSessionId);
       await refreshSessions();
-      setMessage('Traffic deleted.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteDomains(): Promise<void> {
+    if (!selectedSessionId || !selectedDomains.size) return;
+    setBusy(true);
+    try {
+      const targets = calls.filter((call) => selectedDomains.has(callHost(call)));
+      await Promise.all(targets.map((call) => deleteCapturedCall(selectedSessionId, call.id)));
+      setSelectedCallIds(new Set());
+      await refreshCalls(selectedSessionId);
+      await refreshSessions();
+      setMessage(`Deleted traffic for ${selectedDomains.size} domain${selectedDomains.size === 1 ? '' : 's'}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -268,9 +280,9 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
     if (!selectedSessionId) return;
     setBusy(true);
     try {
-      const mock = await createMockFromCall(selectedSessionId, call.id);
+      const mock = await createMockFromCall(selectedSessionId, call.id, { autoWire: true });
       await onMockCreated?.(mock);
-      setMessage(`Mock "${mock.name}" created.`);
+      setMessage(`Mock "${mock.name}" created and wired to localhost for ${call.host}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -278,24 +290,91 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
     }
   }
 
-  async function handleAskAssistant(): Promise<void> {
+  async function handleMockSelectedDomains(): Promise<void> {
+    if (!selectedSessionId || !selectedDomains.size) return;
+    setBusy(true);
+    try {
+      const result = await createMocksFromDomains(selectedSessionId, Array.from(selectedDomains), { autoWire: true });
+      await onMocksCreated?.(result.mocks);
+      const domainLabel = result.domains.length ? result.domains.join(', ') : Array.from(selectedDomains).join(', ');
+      setMessage(
+        `Created ${result.mocks.length} mock${result.mocks.length === 1 ? '' : 's'} for ${domainLabel}. Those domains now resolve to local mocks in the mock browser session.`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRunAssistant(): Promise<void> {
     if (!assistantPrompt.trim()) {
       setMessage('Tell the assistant what you need.');
       return;
     }
     setAssistantBusy(true);
     try {
-      const result = await suggestMocks({
+      const input = {
         requirement: assistantPrompt,
         sessionId: selectedSessionId ?? undefined,
         domains: Array.from(selectedDomains)
-      });
-      setAssistantResult(result);
+      };
+      if (assistantMode === 'ask') {
+        setAssistantView({ kind: 'suggest', data: await suggestMocks(input) });
+      } else if (assistantMode === 'analyze') {
+        setAssistantView({ kind: 'analyze', data: await analyzeMocks(input) });
+      } else {
+        setAssistantView({ kind: 'diagnose', data: await diagnoseMocks(input) });
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setAssistantBusy(false);
     }
+  }
+
+  async function handleCreateFromPlan(plan: MockAnalysisPlan): Promise<void> {
+    if (!plan.createMocks?.length) {
+      setMessage('Plan has nothing to create.');
+      return;
+    }
+    setCreateBusy(true);
+    try {
+      const result = await createMocksFromPlan({
+        sessionId: selectedSessionId ?? undefined,
+        autoWire: true,
+        plan
+      });
+      await onMocksCreated?.(result.created);
+      for (const mock of result.created) await onMockCreated?.(mock);
+      setMessage(
+        `Created ${result.created.length} mock${result.created.length === 1 ? '' : 's'} from AI plan` +
+          (result.skipped.length ? ` (${result.skipped.length} skipped)` : '') +
+          '.'
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCreateBusy(false);
+    }
+  }
+
+  async function handleCreateFromCallIds(callIds: string[]): Promise<void> {
+    await handleCreateFromPlan({
+      explanation: 'Created from diagnose suggestion',
+      createMocks: [{ fromCallIds: callIds }]
+    });
+  }
+
+  function handleClearAssistant(): void {
+    setAssistantPrompt('');
+    setAssistantView(null);
+  }
+
+  function highlightCallIds(ids?: string[]): void {
+    if (!ids?.length) return;
+    setSelectedCallIds(new Set(ids));
+    setMessage(`Selected ${ids.length} related call${ids.length === 1 ? '' : 's'} from assistant.`);
   }
 
   return (
@@ -387,6 +466,9 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
                   </div>
                 ) : null}
               </div>
+              <button className="secondary" disabled={!selectedDomains.size || busy} onClick={() => void handleMockSelectedDomains()}>
+                Mock Domains
+              </button>
               <button className="secondary" disabled={!filteredCalls.length || busy} onClick={selectVisibleCalls}>
                 Select Visible
               </button>
@@ -454,33 +536,194 @@ export default function CapturePanel({ onMockCreated }: CapturePanelProps): Reac
             </div>
             <div className="assistant-head-actions">
               <span className={`assistant-status ${aiStatus?.enabled ? 'ready' : ''}`}>{aiStatus?.enabled ? 'Ready' : 'Offline'}</span>
+              <button
+                className="secondary slim-button"
+                disabled={assistantBusy || (!assistantPrompt && !assistantView)}
+                onClick={handleClearAssistant}
+              >
+                Clear
+              </button>
               <button className="secondary slim-button" onClick={() => setAssistantOpen(false)}>Close</button>
             </div>
           </div>
+
+          <div className="assistant-modes">
+            <button
+              className={`assistant-mode ${assistantMode === 'analyze' ? 'active' : ''}`}
+              disabled={assistantBusy}
+              onClick={() => setAssistantMode('analyze')}
+            >
+              Analyze
+            </button>
+            <button
+              className={`assistant-mode ${assistantMode === 'diagnose' ? 'active' : ''}`}
+              disabled={assistantBusy}
+              onClick={() => setAssistantMode('diagnose')}
+            >
+              Diagnose
+            </button>
+            <button
+              className={`assistant-mode ${assistantMode === 'ask' ? 'active' : ''}`}
+              disabled={assistantBusy}
+              onClick={() => setAssistantMode('ask')}
+            >
+              Ask
+            </button>
+            <button
+              className="assistant-mode create-action"
+              disabled={createBusy || assistantView?.kind !== 'analyze' || !assistantView.data.plan.createMocks?.length}
+              onClick={() => {
+                if (assistantView?.kind === 'analyze') void handleCreateFromPlan(assistantView.data.plan);
+              }}
+            >
+              {createBusy ? 'Creating...' : 'Create mocks'}
+            </button>
+          </div>
+
           <div className="assistant-conversation">
-            {assistantResult ? (
+            {assistantView?.kind === 'suggest' ? (
               <div className="assistant-message assistant-message-model">
                 <div className="assistant-meta">
-                  Analyzed {assistantResult.analyzedCalls} call{assistantResult.analyzedCalls === 1 ? '' : 's'}
-                  {assistantResult.domains.length ? ` from ${assistantResult.domains.length} selected domain${assistantResult.domains.length === 1 ? '' : 's'}` : ''}
+                  Analyzed {assistantView.data.analyzedCalls} call{assistantView.data.analyzedCalls === 1 ? '' : 's'}
                 </div>
-                <pre>{assistantResult.suggestion}</pre>
+                <pre className="assistant-response">{assistantView.data.suggestion}</pre>
               </div>
-            ) : (
+            ) : null}
+
+            {assistantView?.kind === 'analyze' ? (
+              <div className="assistant-message assistant-message-model">
+                <div className="assistant-meta">
+                  Structured plan from {assistantView.data.analyzedCalls} call{assistantView.data.analyzedCalls === 1 ? '' : 's'}
+                </div>
+                <p className="assistant-explanation">{assistantView.data.plan.explanation}</p>
+                {assistantView.data.plan.warnings?.length ? (
+                  <ul className="assistant-list warn">
+                    {assistantView.data.plan.warnings.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {assistantView.data.plan.createMocks?.length ? (
+                  <div className="assistant-actions">
+                    <div className="assistant-meta">Suggested mocks</div>
+                    {assistantView.data.plan.createMocks.map((item, index) => (
+                      <div key={`${item.name || 'mock'}-${index}`} className="assistant-card">
+                        <strong>{item.name || `Mock group ${index + 1}`}</strong>
+                        <div className="assistant-card-meta">
+                          {item.fromCallIds.map((id) => callLabel(calls, id)).join(' · ')}
+                        </div>
+                        {item.notes ? <div className="assistant-card-notes">{item.notes}</div> : null}
+                      </div>
+                    ))}
+                    <button
+                      className="primary"
+                      disabled={createBusy || !aiStatus?.enabled}
+                      onClick={() => void handleCreateFromPlan(assistantView.data.plan)}
+                    >
+                      {createBusy ? 'Creating...' : `Create ${assistantView.data.plan.createMocks.length} mock(s)`}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="assistant-empty">No createMocks entries — try refining the goal.</div>
+                )}
+                {assistantView.data.plan.deleteDomains?.length ? (
+                  <div className="assistant-actions">
+                    <div className="assistant-meta">Noise domains to ignore/delete</div>
+                    <div className="assistant-tags">
+                      {assistantView.data.plan.deleteDomains.map((domain) => (
+                        <span key={domain} className="assistant-tag">{domain}</span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {assistantView.data.plan.relatedCallIds?.length ? (
+                  <button className="secondary" onClick={() => highlightCallIds(assistantView.data.plan.relatedCallIds)}>
+                    Select related calls
+                  </button>
+                ) : null}
+                {assistantView.data.plan.nextSteps?.length ? (
+                  <ul className="assistant-list">
+                    {assistantView.data.plan.nextSteps.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+
+            {assistantView?.kind === 'diagnose' ? (
+              <div className="assistant-message assistant-message-model">
+                <div className="assistant-meta">
+                  Diagnosis using {assistantView.data.analyzedCalls} calls + {assistantView.data.networkEntries} mock-session network event
+                  {assistantView.data.networkEntries === 1 ? '' : 's'}
+                </div>
+                <p className="assistant-explanation">{assistantView.data.diagnosis.explanation}</p>
+                {assistantView.data.diagnosis.likelyCauses?.length ? (
+                  <ul className="assistant-list warn">
+                    {assistantView.data.diagnosis.likelyCauses.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {assistantView.data.diagnosis.missingOperations?.length ? (
+                  <div className="assistant-actions">
+                    <div className="assistant-meta">Missing operations / requests</div>
+                    <div className="assistant-tags">
+                      {assistantView.data.diagnosis.missingOperations.map((item) => (
+                        <span key={item} className="assistant-tag">{item}</span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {assistantView.data.diagnosis.createFromCallIds?.length ? (
+                  <button
+                    className="primary"
+                    disabled={createBusy}
+                    onClick={() => void handleCreateFromCallIds(assistantView.data.diagnosis.createFromCallIds || [])}
+                  >
+                    Create mocks for suggested calls
+                  </button>
+                ) : null}
+                {assistantView.data.diagnosis.relatedCallIds?.length ? (
+                  <button className="secondary" onClick={() => highlightCallIds(assistantView.data.diagnosis.relatedCallIds)}>
+                    Select related calls
+                  </button>
+                ) : null}
+                {assistantView.data.diagnosis.nextSteps?.length ? (
+                  <ul className="assistant-list">
+                    {assistantView.data.diagnosis.nextSteps.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+
+            {!assistantView ? (
               <div className="assistant-empty">
-                Ask for mock suggestions, noisy domains to remove, or response data ideas based on captured traffic.
+                Analyze returns a structured mock plan. Create applies it from real captured responses. Diagnose uses
+                mock-session network hit/miss logs to explain why the UI still fails.
               </div>
-            )}
+            ) : null}
           </div>
+
           <div className="assistant-compose">
             <textarea
               value={assistantPrompt}
               onChange={(event) => setAssistantPrompt(event.target.value)}
-              placeholder="Example: I only care about the coffee-cart API. Suggest mocks I should create and noisy domains I should delete."
+              placeholder={
+                assistantMode === 'diagnose'
+                  ? 'Example: Style it with never appears on the Rayyan mat PDP when my GraphQL mock is enabled.'
+                  : 'Example: I need Style it with / Complete The Look recommendations mocked from captured traffic.'
+              }
               disabled={assistantBusy}
             />
-            <button className="primary" disabled={assistantBusy || !assistantPrompt.trim() || !aiStatus?.enabled} onClick={() => void handleAskAssistant()}>
-              {assistantBusy ? 'Thinking...' : 'Ask'}
+            <button
+              className="primary"
+              disabled={assistantBusy || !assistantPrompt.trim() || !aiStatus?.enabled}
+              onClick={() => void handleRunAssistant()}
+            >
+              {assistantBusy ? 'Thinking...' : assistantMode === 'diagnose' ? 'Diagnose' : assistantMode === 'ask' ? 'Ask' : 'Analyze'}
             </button>
           </div>
         </section>

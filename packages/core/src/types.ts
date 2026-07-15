@@ -2,6 +2,18 @@ export type MockProtocol = 'rest' | 'graphql';
 export type MockSourceType = 'openapi' | 'curl' | 'postman' | 'har';
 export type MockStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
 
+export type MatchTarget = 'url' | 'path' | 'body' | 'header';
+export type MatchOperator = 'contains' | 'equals';
+
+/** Mockoon-style response rule: mock only when request matches. */
+export interface MatchRule {
+  target: MatchTarget;
+  operator: MatchOperator;
+  value: string;
+  /** Required when target is `header`. */
+  header?: string;
+}
+
 export type JsonSchemaLike =
   | {
       type?: string;
@@ -35,6 +47,8 @@ export interface MockEndpoint {
   requestBodySchema?: JsonSchemaLike;
   responseSchema?: JsonSchemaLike;
   responseExample?: unknown;
+  /** When set, all rules must match (AND). Empty = any request to method+path. */
+  matchRules?: MatchRule[];
   statusCode: number;
   latencyMs: number;
   errorRate: number;
@@ -54,6 +68,12 @@ export interface MockDefinition {
   latencyMs: number;
   errorRate: number;
   graphqlEnabled: boolean;
+  /**
+   * Mockoon-style proxy mode: requests that do not match any endpoint rule
+   * are forwarded to proxyUrl (or sourceRef origin).
+   */
+  proxyEnabled?: boolean;
+  proxyUrl?: string;
   createdAt: string;
   updatedAt: string;
   endpoints: MockEndpoint[];

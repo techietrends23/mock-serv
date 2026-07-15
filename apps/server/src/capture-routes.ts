@@ -1,6 +1,15 @@
 import type { FastifyInstance } from 'fastify';
-import { CaptureSessionManager, MockService, toJsonSchemaLike, ensureLeadingSlash, inferNameFromMethodAndPath, stableId, nowIso } from '@mock-serv/core';
+import {
+  CaptureSessionManager,
+  MockService,
+  ensureLeadingSlash
+} from '@mock-serv/core';
 import type { CapturedCall, MockDefinition } from '@mock-serv/core';
+import {
+  createMockFromCalls,
+  hostFromSourceRef,
+  sanitizePath
+} from './capture-mock-factory.ts';
 
 export function registerCaptureRoutes(server: FastifyInstance, service: MockService): void {
   const captureManager = new CaptureSessionManager(service.repository as any);
@@ -64,77 +73,65 @@ export function registerCaptureRoutes(server: FastifyInstance, service: MockServ
     }
   );
 
-  server.post<{ Params: { sessionId: string; callId: string }; Body: { name?: string; description?: string } }>(
+  server.post<{ Params: { sessionId: string; callId: string }; Body: { name?: string; description?: string; autoWire?: boolean } }>(
     '/api/capture/sessions/:sessionId/calls/:callId/mock',
     async (request) => {
       const call = captureManager.getCall(request.params.callId);
       if (!call) throw new Error('Captured call not found');
 
       const mockName = request.body.name || `captured_${call.method.toLowerCase()}_${call.path.replace(/[^a-zA-Z0-9]/g, '_')}`;
-      const mockId = stableId('mock');
-      const now = nowIso();
-      const endpointId = stableId('endpoint');
-      const path = ensureLeadingSlash(call.path.split('?')[0]);
-      const tableName = `captured_${call.method.toLowerCase()}_${sanitizePath(path)}`;
-
-      const queryParams = call.queryString
-        ? new URLSearchParams(call.queryString).toString()
-          ? Array.from(new URLSearchParams(call.queryString).entries()).map(([name]) => ({
-              name,
-              required: false,
-              schema: { type: 'string' } as any
-            }))
-          : []
-        : [];
-
-      const requestBodySchema = call.requestBody !== undefined
-        ? toJsonSchemaLike(call.requestBody)
-        : undefined;
-
-      const responseSchema = call.responseBody !== undefined
-        ? toJsonSchemaLike(call.responseBody)
-        : undefined;
-
-      const endpoint: any = {
-        id: endpointId,
-        mockId,
-        name: inferNameFromMethodAndPath(call.method, path),
-        method: call.method,
-        path,
-        requestHeaders: call.requestHeaders,
-        pathParameters: [],
-        queryParameters: queryParams,
-        requestBodySchema,
-        responseSchema,
-        responseExample: call.responseBody,
-        statusCode: call.responseStatus || 200,
-        latencyMs: 0,
-        errorRate: 0,
-        tableName,
-        orderIndex: 0
-      };
-
-      const mock: MockDefinition = {
-        id: mockId,
+      let mock = createMockFromCalls(service, [call], {
         name: mockName,
-        protocol: 'rest',
-        description: request.body.description || `Created from captured ${call.method} ${path}`,
-        sourceType: 'har',
-        sourceRef: call.url,
-        status: 'stopped',
-        latencyMs: 0,
-        errorRate: 0,
-        graphqlEnabled: false,
-        createdAt: now,
-        updatedAt: now,
-        endpoints: [endpoint]
-      };
+        description: request.body.description || `Created from captured ${call.method} ${ensureLeadingSlash(call.path.split('?')[0])} (${call.host})`
+      });
 
-      return service.saveMock(mock);
+      if (request.body.autoWire !== false) {
+        mock = await service.startMock(mock.id);
+      }
+
+      return mock;
     }
   );
-}
 
-function sanitizePath(p: string): string {
-  return p.replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').toLowerCase();
+  server.post<{
+    Params: { sessionId: string };
+    Body: { domains: string[]; autoWire?: boolean };
+  }>('/api/capture/sessions/:sessionId/mocks-from-domains', async (request) => {
+    const domains = Array.from(new Set((request.body.domains ?? []).map((domain) => domain.trim()).filter(Boolean)));
+    if (!domains.length) throw new Error('Select at least one domain.');
+
+    const calls = captureManager
+      .listCalls(request.params.sessionId)
+      .filter((call) => domains.includes(call.host));
+    if (!calls.length) throw new Error('No captured calls found for the selected domains.');
+
+    const byHost = new Map<string, CapturedCall[]>();
+    for (const call of calls) {
+      const group = byHost.get(call.host) ?? [];
+      group.push(call);
+      byHost.set(call.host, group);
+    }
+
+    const mocks: MockDefinition[] = [];
+    for (const domain of domains) {
+      const hostCalls = byHost.get(domain);
+      if (!hostCalls?.length) continue;
+      let mock = createMockFromCalls(service, hostCalls, {
+        name: `mock_${sanitizePath(domain)}`,
+        description: `Auto-created from domain ${domain} (${hostCalls.length} captured call${hostCalls.length === 1 ? '' : 's'})`
+      });
+      if (request.body.autoWire !== false) {
+        mock = await service.startMock(mock.id);
+      }
+      mocks.push(mock);
+    }
+
+    return {
+      mocks,
+      domains: mocks
+        .map((mock) => hostFromSourceRef(mock.sourceRef))
+        .filter((host): host is string => Boolean(host)),
+      autoWired: request.body.autoWire !== false
+    };
+  });
 }
