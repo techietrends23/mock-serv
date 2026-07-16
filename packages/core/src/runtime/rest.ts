@@ -1,9 +1,10 @@
 import Fastify from 'fastify';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { MockDefinition, MockEndpoint } from '../types.ts';
+import type { JsonSchemaLike, MockDefinition, MockEndpoint } from '../types.ts';
 import { endpointResponseExample } from '../schema.ts';
 import { matchesAllRules } from '../match-rules.ts';
 import { ensureLeadingSlash, isCollectionPath, normalizePathPattern, sampleFromSchema, sanitizeIdentifier } from '../utils.ts';
+import { renderDeep, resolveSequence, buildRequestContext } from '../response-engine.ts';
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,6 +107,21 @@ async function proxyRequest(mock: MockDefinition, request: FastifyRequest, reply
   return reply.code(upstream.status).send(text);
 }
 
+function validateAgainstSchema(body: unknown, schema: JsonSchemaLike | undefined): string | null {
+  if (!schema) return null;
+  const typed = schema as Record<string, unknown>;
+  if (typed.type === 'object' && typed.required && Array.isArray(typed.required)) {
+    if (!body || typeof body !== 'object') return 'Request body must be an object';
+    const obj = body as Record<string, unknown>;
+    for (const field of typed.required) {
+      if (!(field in obj) || obj[field] === undefined) {
+        return `Missing required field: ${field}`;
+      }
+    }
+  }
+  return null;
+}
+
 async function handleMockedEndpoint(
   mock: MockDefinition,
   endpoint: MockEndpoint,
@@ -113,7 +129,18 @@ async function handleMockedEndpoint(
   reply: FastifyReply,
   repository: RestRuntime['repository']
 ): Promise<unknown> {
-  const latency = Math.max(mock.latencyMs ?? 0, endpoint.latencyMs ?? 0);
+  // Request body validation
+  const validationError = validateAgainstSchema(request.body, endpoint.requestBodySchema as JsonSchemaLike | undefined);
+  if (validationError) {
+    repository.appendLog(mock.id, 'warn', `Validation failed for ${endpoint.method} ${endpoint.path}: ${validationError}`);
+    return reply.code(400).send({ error: 'Validation failed', detail: validationError });
+  }
+
+  const latency = Math.max(
+    mock.latencyMs ?? 0,
+    endpoint.latencyMs ?? 0,
+    endpoint.responseSequence?.[0]?.latencyMs ?? 0
+  );
   if (latency > 0) await delay(latency);
 
   const errorRate = Math.max(mock.errorRate ?? 0, endpoint.errorRate ?? 0);
@@ -127,6 +154,32 @@ async function handleMockedEndpoint(
   const query = request.query as Record<string, unknown>;
   const body = (request.body ?? {}) as Record<string, unknown>;
   const tableName = endpoint.tableName || sanitizeIdentifier(`${mock.name}_${endpoint.method}_${endpoint.path}`).toLowerCase();
+  const headers = request.headers as Record<string, string | string[] | undefined>;
+  const flatHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    flatHeaders[k] = Array.isArray(v) ? v.join(',') : String(v ?? '');
+  }
+  const flatQuery: Record<string, string> = {};
+  for (const [k, v] of Object.entries(query)) {
+    flatQuery[k] = Array.isArray(v) ? v.join(',') : String(v ?? '');
+  }
+
+  const ctx = buildRequestContext({
+    body, query: flatQuery, params, headers: flatHeaders, method, path: request.url
+  });
+
+  // Response sequence support
+  const seq = resolveSequence(endpoint);
+  if (seq) {
+    const rendered = renderDeep(seq.body, ctx);
+    return reply.code(seq.statusCode).send(rendered);
+  }
+
+  // Response template support
+  if (endpoint.responseTemplate) {
+    const rendered = renderDeep(endpoint.responseExample ?? endpointResponseExample(endpoint), ctx);
+    return reply.code(endpoint.statusCode || 200).send(rendered);
+  }
 
   // Canned response (GraphQL captures, static mocks, etc.)
   if (endpoint.responseExample !== undefined && (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'GET')) {

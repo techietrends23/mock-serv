@@ -40,6 +40,8 @@ interface EndpointRowRecord {
   responseSchema: string | null;
   responseExample: string | null;
   matchRules?: string | null;
+  responseTemplate?: string | null;
+  responseSequence?: string | null;
   statusCode: number;
   latencyMs: number;
   errorRate: number;
@@ -117,9 +119,12 @@ export class WorkspaceRepository {
         requestBodySchema TEXT,
         responseSchema TEXT,
         responseExample TEXT,
+        matchRules TEXT,
         statusCode INTEGER NOT NULL DEFAULT 200,
         latencyMs INTEGER NOT NULL DEFAULT 0,
         errorRate REAL NOT NULL DEFAULT 0,
+        responseTemplate TEXT,
+        responseSequence TEXT,
         tableName TEXT NOT NULL,
         orderIndex INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (mockId) REFERENCES mocks(id) ON DELETE CASCADE
@@ -171,6 +176,8 @@ export class WorkspaceRepository {
     this.ensureColumn('mocks', 'proxyEnabled', 'INTEGER NOT NULL DEFAULT 0');
     this.ensureColumn('mocks', 'proxyUrl', 'TEXT');
     this.ensureColumn('endpoints', 'matchRules', 'TEXT');
+    this.ensureColumn('endpoints', 'responseTemplate', 'TEXT');
+    this.ensureColumn('endpoints', 'responseSequence', 'TEXT');
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -217,6 +224,8 @@ export class WorkspaceRepository {
       responseSchema: safeJsonParse(row.responseSchema ?? undefined, undefined),
       responseExample: safeJsonParse(row.responseExample ?? undefined, undefined),
       matchRules: safeJsonParse(row.matchRules ?? undefined, undefined),
+      responseTemplate: row.responseTemplate ?? undefined,
+      responseSequence: safeJsonParse(row.responseSequence ?? undefined, undefined) as MockEndpoint['responseSequence'],
       statusCode: row.statusCode,
       latencyMs: row.latencyMs,
       errorRate: row.errorRate,
@@ -301,8 +310,8 @@ export class WorkspaceRepository {
     endpoints: Array<Omit<MockEndpoint, 'id' | 'mockId' | 'orderIndex'> & { tableName?: string }>
   ): MockEndpoint[] {
     const insert = this.db.prepare(`
-      INSERT INTO endpoints (id, mockId, name, method, path, summary, description, requestHeaders, pathParameters, queryParameters, requestBodySchema, responseSchema, responseExample, matchRules, statusCode, latencyMs, errorRate, tableName, orderIndex)
-      VALUES (@id, @mockId, @name, @method, @path, @summary, @description, @requestHeaders, @pathParameters, @queryParameters, @requestBodySchema, @responseSchema, @responseExample, @matchRules, @statusCode, @latencyMs, @errorRate, @tableName, @orderIndex)
+      INSERT INTO endpoints (id, mockId, name, method, path, summary, description, requestHeaders, pathParameters, queryParameters, requestBodySchema, responseSchema, responseExample, matchRules, statusCode, latencyMs, errorRate, responseTemplate, responseSequence, tableName, orderIndex)
+      VALUES (@id, @mockId, @name, @method, @path, @summary, @description, @requestHeaders, @pathParameters, @queryParameters, @requestBodySchema, @responseSchema, @responseExample, @matchRules, @statusCode, @latencyMs, @errorRate, @responseTemplate, @responseSequence, @tableName, @orderIndex)
     `);
 
     this.transaction(() => {
@@ -310,24 +319,27 @@ export class WorkspaceRepository {
       endpoints.forEach((endpoint, index) => {
         const tableName = endpoint.tableName || toTableName(mockName, endpoint.path, endpoint.method);
         this.ensureCrudTable(tableName);
+        const ep = endpoint as MockEndpoint;
         insert.run({
-          id: (endpoint as MockEndpoint).id || stableId('endpoint'),
+          id: ep.id || stableId('endpoint'),
           mockId,
-          name: endpoint.name,
-          method: endpoint.method.toUpperCase(),
-          path: endpoint.path,
-          summary: endpoint.summary ?? null,
-          description: endpoint.description ?? null,
-          requestHeaders: JSON.stringify(endpoint.requestHeaders ?? {}),
-          pathParameters: JSON.stringify(endpoint.pathParameters ?? []),
-          queryParameters: JSON.stringify(endpoint.queryParameters ?? []),
-          requestBodySchema: endpoint.requestBodySchema ? JSON.stringify(endpoint.requestBodySchema) : null,
-          responseSchema: endpoint.responseSchema ? JSON.stringify(endpoint.responseSchema) : null,
-          responseExample: endpoint.responseExample !== undefined ? JSON.stringify(endpoint.responseExample) : null,
-          matchRules: endpoint.matchRules?.length ? JSON.stringify(endpoint.matchRules) : null,
-          statusCode: endpoint.statusCode,
-          latencyMs: endpoint.latencyMs,
-          errorRate: endpoint.errorRate,
+          name: ep.name,
+          method: ep.method.toUpperCase(),
+          path: ep.path,
+          summary: ep.summary ?? null,
+          description: ep.description ?? null,
+          requestHeaders: JSON.stringify(ep.requestHeaders ?? {}),
+          pathParameters: JSON.stringify(ep.pathParameters ?? []),
+          queryParameters: JSON.stringify(ep.queryParameters ?? []),
+          requestBodySchema: ep.requestBodySchema ? JSON.stringify(ep.requestBodySchema) : null,
+          responseSchema: ep.responseSchema ? JSON.stringify(ep.responseSchema) : null,
+          responseExample: ep.responseExample !== undefined ? JSON.stringify(ep.responseExample) : null,
+          matchRules: ep.matchRules?.length ? JSON.stringify(ep.matchRules) : null,
+          statusCode: ep.statusCode,
+          latencyMs: ep.latencyMs,
+          errorRate: ep.errorRate,
+          responseTemplate: ep.responseTemplate ?? null,
+          responseSequence: ep.responseSequence?.length ? JSON.stringify(ep.responseSequence) : null,
           tableName,
           orderIndex: index
         });
@@ -341,7 +353,7 @@ export class WorkspaceRepository {
     const current = endpoint.id ? this.getEndpoint(endpoint.id) : undefined;
     const tableName = endpoint.tableName || current?.tableName || toTableName(mockName, endpoint.path, endpoint.method);
     this.ensureCrudTable(tableName);
-    const row = {
+    const row: Record<string, unknown> = {
       id: endpoint.id ?? stableId('endpoint'),
       mockId,
       name: endpoint.name,
@@ -376,6 +388,16 @@ export class WorkspaceRepository {
           : current?.matchRules?.length
             ? JSON.stringify(current.matchRules)
             : null,
+      responseTemplate: endpoint.responseTemplate !== undefined
+        ? endpoint.responseTemplate
+        : current?.responseTemplate ?? null,
+      responseSequence: endpoint.responseSequence !== undefined
+        ? endpoint.responseSequence?.length
+          ? JSON.stringify(endpoint.responseSequence)
+          : null
+        : current?.responseSequence?.length
+          ? JSON.stringify(current.responseSequence)
+          : null,
       statusCode: endpoint.statusCode ?? current?.statusCode ?? 200,
       latencyMs: endpoint.latencyMs ?? current?.latencyMs ?? 0,
       errorRate: endpoint.errorRate ?? current?.errorRate ?? 0,
@@ -384,8 +406,8 @@ export class WorkspaceRepository {
     };
 
     this.db.prepare(`
-      INSERT INTO endpoints (id, mockId, name, method, path, summary, description, requestHeaders, pathParameters, queryParameters, requestBodySchema, responseSchema, responseExample, matchRules, statusCode, latencyMs, errorRate, tableName, orderIndex)
-      VALUES (@id, @mockId, @name, @method, @path, @summary, @description, @requestHeaders, @pathParameters, @queryParameters, @requestBodySchema, @responseSchema, @responseExample, @matchRules, @statusCode, @latencyMs, @errorRate, @tableName, @orderIndex)
+      INSERT INTO endpoints (id, mockId, name, method, path, summary, description, requestHeaders, pathParameters, queryParameters, requestBodySchema, responseSchema, responseExample, matchRules, statusCode, latencyMs, errorRate, responseTemplate, responseSequence, tableName, orderIndex)
+      VALUES (@id, @mockId, @name, @method, @path, @summary, @description, @requestHeaders, @pathParameters, @queryParameters, @requestBodySchema, @responseSchema, @responseExample, @matchRules, @statusCode, @latencyMs, @errorRate, @responseTemplate, @responseSequence, @tableName, @orderIndex)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         method = excluded.method,
@@ -402,11 +424,13 @@ export class WorkspaceRepository {
         statusCode = excluded.statusCode,
         latencyMs = excluded.latencyMs,
         errorRate = excluded.errorRate,
+        responseTemplate = excluded.responseTemplate,
+        responseSequence = excluded.responseSequence,
         tableName = excluded.tableName,
         orderIndex = excluded.orderIndex
     `).run(row);
 
-    return this.getEndpoint(row.id)!;
+    return this.getEndpoint(row.id as string)!;
   }
 
   deleteEndpoint(endpointId: string): void {

@@ -113,6 +113,7 @@ class InMemoryRepository {
 
 class InMemoryRuntime {
   private states = new Map<string, { status: MockDefinition['status']; port?: number }>();
+  syncCalls: string[] = [];
 
   constructor(private readonly repository: InMemoryRepository) {}
 
@@ -134,6 +135,7 @@ class InMemoryRuntime {
   }
 
   async sync(mockId: string): Promise<MockDefinition> {
+    this.syncCalls.push(mockId);
     const mock = this.repository.getMock(mockId);
     if (!mock) throw new Error(`Mock not found: ${mockId}`);
     return mock;
@@ -166,5 +168,68 @@ describe('MockService', () => {
 
     const stopped = await service.stopMock(mock.id);
     expect(stopped?.status).toBe('stopped');
+  });
+
+  it('triggers runtime sync on saveMock', async () => {
+    const repository = new InMemoryRepository();
+    const runtime = new InMemoryRuntime(repository);
+    const service = new MockService('in-memory', { repository, runtime });
+    const mock = await service.importMock({
+      sourceType: 'curl',
+      content: 'curl -X GET https://example.com/users',
+      name: 'sync-test'
+    });
+
+    runtime.syncCalls = [];
+    const updated = { ...mock, latencyMs: 5000 };
+    service.saveMock(updated);
+
+    expect(runtime.syncCalls).toContain(mock.id);
+  });
+
+  it('triggers runtime sync on updateMock', async () => {
+    const repository = new InMemoryRepository();
+    const runtime = new InMemoryRuntime(repository);
+    const service = new MockService('in-memory', { repository, runtime });
+    const mock = await service.importMock({
+      sourceType: 'curl',
+      content: 'curl -X GET https://example.com/users',
+      name: 'update-test'
+    });
+
+    runtime.syncCalls = [];
+    service.updateMock(mock.id, { latencyMs: 3000 });
+
+    expect(runtime.syncCalls).toContain(mock.id);
+  });
+
+  it('persists latencyMs through saveMock round-trip', async () => {
+    const repository = new InMemoryRepository();
+    const runtime = new InMemoryRuntime(repository);
+    const service = new MockService('in-memory', { repository, runtime });
+    const mock = await service.importMock({
+      sourceType: 'curl',
+      content: 'curl -X GET https://example.com/users',
+      name: 'latency-test'
+    });
+
+    const saved = service.saveMock({ ...mock, latencyMs: 5000 });
+    const fetched = service.getMock(mock.id);
+    expect(fetched?.latencyMs).toBe(5000);
+  });
+
+  it('persists errorRate through updateMock', async () => {
+    const repository = new InMemoryRepository();
+    const runtime = new InMemoryRuntime(repository);
+    const service = new MockService('in-memory', { repository, runtime });
+    const mock = await service.importMock({
+      sourceType: 'curl',
+      content: 'curl -X GET https://example.com/users',
+      name: 'error-test'
+    });
+
+    service.updateMock(mock.id, { errorRate: 0.5 });
+    const fetched = service.getMock(mock.id);
+    expect(fetched?.errorRate).toBe(0.5);
   });
 });

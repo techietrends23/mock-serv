@@ -2,8 +2,8 @@ export type MockProtocol = 'rest' | 'graphql';
 export type MockSourceType = 'openapi' | 'curl' | 'postman' | 'har';
 export type MockStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
 
-export type MatchTarget = 'url' | 'path' | 'body' | 'header';
-export type MatchOperator = 'contains' | 'equals';
+export type MatchTarget = 'url' | 'path' | 'body' | 'header' | 'query';
+export type MatchOperator = 'contains' | 'equals' | 'regex' | 'jsonpath';
 
 /** Mockoon-style response rule: mock only when request matches. */
 export interface MatchRule {
@@ -12,6 +12,8 @@ export interface MatchRule {
   value: string;
   /** Required when target is `header`. */
   header?: string;
+  /** Query parameter name when target is `query`. */
+  queryParam?: string;
 }
 
 export type JsonSchemaLike =
@@ -32,6 +34,12 @@ export type JsonSchemaLike =
       additionalProperties?: boolean | JsonSchemaLike;
     }
   | unknown;
+
+export interface ResponseSequenceItem {
+  statusCode: number;
+  body: unknown;
+  latencyMs?: number;
+}
 
 export interface MockEndpoint {
   id: string;
@@ -54,6 +62,10 @@ export interface MockEndpoint {
   errorRate: number;
   tableName: string;
   orderIndex: number;
+  /** Dynamic template (Handlebars-style) evaluated at response time. */
+  responseTemplate?: string;
+  /** Sequential responses — cycles through on each match. Overrides responseExample. */
+  responseSequence?: ResponseSequenceItem[];
 }
 
 export interface MockDefinition {

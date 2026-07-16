@@ -26,12 +26,54 @@ function bodyText(body: unknown): string {
   }
 }
 
-function compare(actual: string, operator: MatchOperator, expected: string): boolean {
-  if (!expected) return true;
-  if (operator === 'equals') return actual === expected;
-  return actual.toLowerCase().includes(expected.toLowerCase());
+function getQueryParam(queryString: string | undefined, name: string): string {
+  if (!queryString) return '';
+  const params = new URLSearchParams(queryString.startsWith('?') ? queryString.slice(1) : queryString);
+  return params.get(name) ?? '';
 }
 
+function resolveJsonPath(obj: unknown, path: string): unknown {
+  const parts = path.replace(/^\./, '').split('.');
+  let current: unknown = obj;
+  for (const part of parts) {
+    if (current == null || typeof current !== 'object') return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function compare(actual: string, operator: MatchOperator, expected: string): boolean {
+  if (!expected) return true;
+  switch (operator) {
+    case 'equals':
+      return actual === expected;
+    case 'regex':
+      try {
+        return new RegExp(expected).test(actual);
+      } catch {
+        return false;
+      }
+    case 'jsonpath': {
+      const parsed = tryParseJson(actual);
+      if (parsed === undefined) return actual.toLowerCase().includes(expected.toLowerCase());
+      const resolved = resolveJsonPath(parsed, expected);
+      if (resolved === undefined) return false;
+      return String(resolved) === expected.split('.').pop();
+    }
+    default:
+      return actual.toLowerCase().includes(expected.toLowerCase());
+  }
+}
+
+function tryParseJson(value: string): unknown | undefined {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+export type { MatchRule };
 export function evaluateMatchRule(rule: MatchRule, request: MatchRequest): boolean {
   const operator = rule.operator || 'contains';
   switch (rule.target) {
@@ -39,6 +81,8 @@ export function evaluateMatchRule(rule: MatchRule, request: MatchRequest): boole
       return compare(request.url || `${request.path}${request.queryString || ''}`, operator, rule.value);
     case 'path':
       return compare(request.path, operator, rule.value);
+    case 'query':
+      return compare(getQueryParam(request.queryString, rule.queryParam ?? ''), operator, rule.value);
     case 'body':
       return compare(bodyText(request.body), operator, rule.value);
     case 'header':
@@ -64,6 +108,14 @@ export function urlContainsRule(value: string): MatchRule {
 
 export function pathContainsRule(value: string): MatchRule {
   return { target: 'path', operator: 'contains', value };
+}
+
+export function queryEqualsRule(name: string, value: string): MatchRule {
+  return { target: 'query', operator: 'equals', value, queryParam: name };
+}
+
+export function bodyRegexRule(pattern: string): MatchRule {
+  return { target: 'body', operator: 'regex', value: pattern };
 }
 
 export function rulesFromShortcuts(input: {
