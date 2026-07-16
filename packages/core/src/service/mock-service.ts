@@ -133,6 +133,7 @@ export class MockService {
     if (mock.endpoints?.length) {
       this.repository.saveEndpoints(saved.id, saved.name, mock.endpoints);
     }
+    void this.runtime.sync(saved.id);
     return this.getMock(saved.id)!;
   }
 
@@ -160,6 +161,7 @@ export class MockService {
     const existing = this.repository.getMock(mockId);
     if (!existing) throw new Error(`Mock not found: ${mockId}`);
     const saved = this.repository.saveMock({ ...existing, ...patch, updatedAt: nowIso() });
+    void this.runtime.sync(mockId);
     return this.getMock(saved.id)!;
   }
 

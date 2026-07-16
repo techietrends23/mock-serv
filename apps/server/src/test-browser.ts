@@ -24,6 +24,10 @@ const recentNetwork: Array<{
 /** When true, PDP JS is rewritten so kosmos_complete_the_look_pdp is on. */
 let forceCompleteTheLookFlag = true;
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function rememberNetwork(entry: (typeof recentNetwork)[number]): void {
   recentNetwork.push(entry);
   if (recentNetwork.length > 200) recentNetwork.splice(0, recentNetwork.length - 200);
@@ -364,6 +368,10 @@ async function ensureBrowser(service: MockService): Promise<void> {
 
       const payload = payloadForEndpoint(service, match.mock, match.endpoint);
       const body = responseBody(payload);
+
+      const latency = Math.max(match.mock.latencyMs ?? 0, match.endpoint.latencyMs ?? 0);
+      if (latency > 0) await delay(latency);
+
       let looksCount: number | undefined;
       try {
         const parsed = typeof payload === 'string' ? JSON.parse(payload) : payload;
